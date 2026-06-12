@@ -254,7 +254,7 @@ def generate_song_slide(
   return output
 
 
-def load_song_yaml(path: Path) -> dict:
+def load_yaml(path: Path) -> dict:
   try:
     import yaml
   except ImportError as exc:
@@ -263,9 +263,73 @@ def load_song_yaml(path: Path) -> dict:
     return yaml.safe_load(f)
 
 
+def collect_intro_lines(data: dict) -> list[str]:
+  if "lines" in data:
+    return [str(line) for line in data["lines"] if line]
+  lines = []
+  for key in ("line1", "line2", "line3", "line4"):
+    if key in data and data[key]:
+      lines.append(str(data[key]))
+  if len(lines) < 3:
+    raise ValueError("Intro needs at least 3 text lines (line1, line2, line3)")
+  return lines
+
+
+def generate_intro_slide(
+  *,
+  lines: list[str],
+  background: Path | None,
+  output: Path,
+  config: dict,
+) -> Path:
+  canvas_w = config["canvas"]["width"]
+  canvas_h = config["canvas"]["height"]
+  intro_cfg = config["intro"]
+  style_templates = intro_cfg["line_styles"]
+
+  if len(lines) > len(style_templates):
+    raise ValueError(f"Intro supports up to {len(style_templates)} lines")
+
+  bg_path = background or Path(config["background"])
+  if not bg_path.is_absolute():
+    bg_path = ROOT / bg_path if not bg_path.exists() else bg_path
+  if not bg_path.exists():
+    bg_path = ROOT / config["background"]
+  if not bg_path.exists():
+    raise FileNotFoundError(f"Background not found: {bg_path}")
+
+  canvas = cover_resize(Image.open(bg_path).convert("RGB"), canvas_w, canvas_h)
+  draw = ImageDraw.Draw(canvas)
+
+  for index, text in enumerate(lines):
+    style = style_templates[index]
+    font = load_font(config, int(style["font_size"]))
+    draw_text_centered(
+      draw,
+      text,
+      canvas_w // 2,
+      int(style["y"]),
+      font,
+      style["color"],
+      style["shadow_color"],
+      int(style["shadow_offset"]),
+      style.get("stroke_color"),
+      int(style.get("stroke_width", 0)),
+    )
+
+  output.parent.mkdir(parents=True, exist_ok=True)
+  canvas.save(output, "PNG", optimize=True)
+  return output
+
+
+def is_intro_yaml(data: dict) -> bool:
+  return "chords" not in data and ("line1" in data or "lines" in data)
+
+
 def main() -> None:
-  parser = argparse.ArgumentParser(description="Generate TikTok guitar song slide")
-  parser.add_argument("song_file", nargs="?", help="YAML song definition")
+  parser = argparse.ArgumentParser(description="Generate TikTok guitar slides")
+  parser.add_argument("song_file", nargs="?", help="YAML song or intro definition")
+  parser.add_argument("--intro", action="store_true", help="Force intro slide mode")
   parser.add_argument("--config", default="config.json", help="Layout config path")
   parser.add_argument("--artist", help="Artist name (Hebrew)")
   parser.add_argument("--song", help="Song title (Hebrew)")
@@ -284,7 +348,21 @@ def main() -> None:
     song_path = Path(args.song_file)
     if not song_path.is_absolute():
       song_path = ROOT / song_path
-    data = load_song_yaml(song_path)
+    data = load_yaml(song_path)
+
+    if args.intro or is_intro_yaml(data):
+      lines = collect_intro_lines(data)
+      background = ROOT / data["background"] if data.get("background") else None
+      output = ROOT / data.get("output", f"output/{song_path.stem}.png")
+      result = generate_intro_slide(
+        lines=lines,
+        background=background,
+        output=output,
+        config=config,
+      )
+      print(f"Created: {result}")
+      return
+
     artist = data["artist"]
     song = data["song"]
     chord_names = data["chords"]

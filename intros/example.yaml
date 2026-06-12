@@ -1,0 +1,7 @@
+# סלייד פתיחה — שנה את הטקסט בכל פעם
+line1: "3 שירים מוכרים"
+line2: "של 4 אקורדים"
+line3: "5 דקות ללמוד"
+line4: "אקורדים בסיסיים בלבד"
+background: "assets/backgrounds/guitar.jpg"
+output: "output/intro.png"

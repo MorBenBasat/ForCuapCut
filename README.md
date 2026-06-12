@@ -29,7 +29,25 @@ python create_test_assets.py
 
 ## שימוש
 
-### קובץ YAML (מומלץ)
+### סלייד פתיחה (Intro — התמונה הראשונה)
+
+ערוך `intros/example.yaml` והרץ:
+
+```bash
+python generate.py intros/example.yaml
+```
+
+```yaml
+line1: "3 שירים מוכרים"      # לבן, למעלה
+line2: "של 4 אקורדים"         # צהוב, מתחת לשורה 1
+line3: "5 דקות ללמוד"         # לבן, למטה
+line4: "אקורדים בסיסיים בלבד" # צהוב, למטה (אופציונלי)
+output: "output/intro.png"
+```
+
+מינימום 3 שורות (`line1`–`line3`). `line4` אופציונלי.
+
+### סלייד שיר — קובץ YAML (מומלץ)
 
 ערוך `songs/bachor_ragish.yaml` והרץ:
 
