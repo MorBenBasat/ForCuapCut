@@ -1,0 +1,11 @@
+artist: "אושרי כהן"
+song: "שם השיר"
+chords:
+  - Am
+  - G
+  - F
+  - C
+  - Dm
+artist_image: "input/osher_cohen.jpg"
+background: "assets/backgrounds/guitar.jpg"
+output: "output/example_5_chords.png"

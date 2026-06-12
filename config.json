@@ -1,0 +1,51 @@
+{
+  "canvas": {
+    "width": 1080,
+    "height": 1920
+  },
+  "background": "assets/backgrounds/guitar.jpg",
+  "chords_dir": "assets/chords",
+  "fonts": {
+    "bold": "C:/Windows/Fonts/arialbd.ttf",
+    "fallback": "C:/Windows/Fonts/segoeuib.ttf"
+  },
+  "singer": {
+    "scale": 24,
+    "anchor": "top_center",
+    "y": 0
+  },
+  "text": {
+    "anchor": "top_center",
+    "artist": {
+      "capcut_x": 0,
+      "capcut_y": 1540,
+      "font_size": 96,
+      "color": "#FFF8DC",
+      "stroke_color": "#000000",
+      "stroke_width": 3,
+      "shadow_color": "#B8860B",
+      "shadow_offset": 2
+    },
+    "song": {
+      "capcut_x": 0,
+      "capcut_y": 1680,
+      "font_size": 112,
+      "color": "#FFEB3B",
+      "stroke_color": "#000000",
+      "stroke_width": 5,
+      "shadow_color": "#000000",
+      "shadow_offset": 2
+    }
+  },
+  "chord_grid": {
+    "scale": 18.5,
+    "horizontal_gap": 28,
+    "center_offset_x": 30,
+    "rows": {
+      "4": {"pattern": [2, 2], "top_y": 215, "bottom_y": -225},
+      "5": {"pattern": [3, 2], "top_y": 215, "bottom_y": -250},
+      "6": {"pattern": [3, 3], "top_y": 215, "bottom_y": -250}
+    }
+  },
+  "scale_reference_height": 1920
+}
