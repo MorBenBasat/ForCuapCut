@@ -7,20 +7,31 @@ assets/
 
 # Python
 __pycache__/
-*.pyc
-*.pyo
+*.py[cod]
+*$py.class
 .venv/
 venv/
 .env
 .env.*
+!.env.example
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+
+# Logs & temp
+*.log
+*.tmp
 
 # IDE / editor
 .cursor/
 .vscode/
+.idea/
 *.swp
 *~
 
 # OS
 Thumbs.db
+ehthumbs.db
 Desktop.ini
 .DS_Store

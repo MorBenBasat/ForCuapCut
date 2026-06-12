@@ -1,0 +1,9 @@
+artist: "עידן עמדי"
+song: "בזמן האחרון"
+chords:
+  - AM
+  - G
+  - DM
+  - F
+  - C
+output: "output/בזמן_האחרון.png"

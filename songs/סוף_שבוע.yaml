@@ -1,0 +1,8 @@
+artist: "אודיה"
+song: "סוף שבוע"
+chords:
+  - CMAJ7
+  - G
+  - D
+  - Em
+output: "output/סוף_שבוע.png"
