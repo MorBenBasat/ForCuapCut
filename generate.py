@@ -19,6 +19,34 @@ def load_config(path: Path) -> dict:
         return json.load(f)
 
 
+def resolve_artist_image(config: dict, artist: str, explicit: str | None = None) -> Path:
+  """Artist photo from YAML/CLI override, or config.json artists registry."""
+  if explicit:
+    path = Path(explicit)
+    if not path.is_absolute():
+      path = ROOT / path
+    return path
+  registry = config.get("artists", {})
+  if artist not in registry:
+    known = ", ".join(sorted(registry)) if registry else "(empty)"
+    raise ValueError(
+      f"Unknown artist '{artist}'. Add to config.json → artists, or set artist_image in YAML.\n"
+      f"Known artists: {known}"
+    )
+  path = Path(registry[artist])
+  if not path.is_absolute():
+    path = ROOT / path
+  return path
+
+
+def song_slug(title: str) -> str:
+  """Filesystem-safe output name from song title."""
+  slug = title.strip().replace(" ", "_")
+  for char in '\\/:*?"<>|':
+    slug = slug.replace(char, "")
+  return slug or "song"
+
+
 def resolve_chord_image(chords_dir: Path, name: str) -> Path:
   """Find chord PNG by name (case-insensitive)."""
   variants = [
@@ -366,22 +394,20 @@ def main() -> None:
     artist = data["artist"]
     song = data["song"]
     chord_names = data["chords"]
-    artist_image = ROOT / data["artist_image"]
+    artist_image = resolve_artist_image(config, artist, data.get("artist_image"))
     background = ROOT / data["background"] if data.get("background") else None
     output = ROOT / data.get("output", f"output/{song_path.stem}.png")
   else:
-    if not all([args.artist, args.song, args.chords, args.artist_image]):
-      parser.error("Provide song_file or --artist --song --chords --artist-image")
+    if not all([args.artist, args.song, args.chords]):
+      parser.error("Provide song_file or --artist --song --chords")
     artist = args.artist
     song = args.song
     chord_names = [c.strip() for c in args.chords.split(",")]
-    artist_image = Path(args.artist_image)
-    if not artist_image.is_absolute():
-      artist_image = ROOT / artist_image
+    artist_image = resolve_artist_image(config, artist, args.artist_image)
     background = Path(args.background) if args.background else None
     if background and not background.is_absolute():
       background = ROOT / background
-    safe_name = song.replace(" ", "_")
+    safe_name = song_slug(song)
     output = Path(args.output) if args.output else ROOT / f"output/{safe_name}.png"
     if not output.is_absolute():
       output = ROOT / output

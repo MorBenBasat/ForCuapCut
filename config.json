@@ -5,6 +5,13 @@
   },
   "background": "assets/backgrounds/guitar.jpg",
   "chords_dir": "assets/chords",
+  "artists": {
+    "דודו אהרון": "input/dudu_aharon.png",
+    "אודיה": "input/Odeya.png",
+    "עדן חסון": "input/eden_hason.png",
+    "אושר כהן": "input/osher_cohen.jpg",
+    "אושרי כהן": "input/osher_cohen.jpg"
+  },
   "fonts": {
     "bold": "C:/Windows/Fonts/arialbd.ttf",
     "fallback": "C:/Windows/Fonts/segoeuib.ttf"

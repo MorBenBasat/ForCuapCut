@@ -1,0 +1,9 @@
+# העתק לשם_שיר.yaml — שנה artist, song, chords
+artist: "דודו אהרון"
+song: "שם השיר"
+chords:
+  - Em
+  - C
+  - G
+  - D
+output: "output/shir_hadash.png"

@@ -27,6 +27,39 @@ output/                     ← התמונות שנוצרות
 python create_test_assets.py
 ```
 
+## שימוש מהיר (מומלץ)
+
+### זמרים שמורים
+
+ב-`config.json` יש רשימת זמרים → תמונה. לא צריך לחזור על `artist_image` בכל שיר.
+
+```json
+"artists": {
+  "דודו אהרון": "input/dudu_aharon.png",
+  "אודיה": "input/Odeya.png"
+}
+```
+
+זמר חדש? הוסף שורה אחת כאן + תמונה ב-`input/`.
+
+### הוספת שיר דרך Cursor (הכי פשוט)
+
+פתח צ'אט ב-**Agent** וכתוב משפט אחד, למשל:
+
+```
+תוסיף שיר לדודו אהרון: "לילה טוב", אקורדים Em,C,G,D
+```
+
+Cursor יוצר את הקובץ, מריץ `generate.py`, ונותן לך תמונה ב-`output/`.
+
+אפשר גם לציין `@add-song-slide` בצ'אט — אותו דבר.
+
+### שורת פקודה (בלי Cursor)
+
+```bash
+python generate.py --artist "דודו אהרון" --song "לילה טוב" --chords Em,C,G,D
+```
+
 ## שימוש
 
 ### סלייד פתיחה (Intro — התמונה הראשונה)
@@ -47,18 +80,12 @@ output: "output/intro.png"
 
 מינימום 3 שורות (`line1`–`line3`). `line4` אופציונלי.
 
-### סלייד שיר — קובץ YAML (מומלץ)
+### סלייד שיר — קובץ YAML
 
-ערוך `songs/bachor_ragish.yaml` והרץ:
+העתק `songs/_template.yaml`, שנה שם/אקורדים, והרץ:
 
 ```bash
 python generate.py songs/bachor_ragish.yaml
-```
-
-### שורת פקודה
-
-```bash
-python generate.py --artist "דודו אהרון" --song "בחור רגיש" --chords Em,C,G,D --artist-image input/dudu_aharon.jpg
 ```
 
 ## פריסת אקורדים
