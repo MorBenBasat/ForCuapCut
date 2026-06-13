@@ -16,6 +16,7 @@ from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandl
 
 from generate import (
   ROOT,
+  generate_intro_slide,
   generate_song_slide,
   load_config,
   resolve_artist_image,
@@ -32,16 +33,45 @@ log = logging.getLogger("forcuapcut.bot")
 
 CONFIG_PATH = ROOT / "config.json"
 SONGS_DIR = ROOT / "songs"
+INTROS_DIR = ROOT / "intros"
 OUTPUT_DIR = ROOT / "output"
 INPUT_DIR = ROOT / "input"
 
 HEBREW_TO_LATIN = {
   "א": "", "ב": "b", "ג": "g", "ד": "d", "ה": "h", "ו": "v", "ז": "z",
   "ח": "ch", "ט": "t", "י": "y", "כ": "k", "ך": "k", "ל": "l", "מ": "m",
-  "ם": "m", "נ": "n", "ן": "n", "ס": "s", "ע": "", "פ": "p", "ף": "p",
-  "צ": "tz", "ץ": "tz", "ק": "k", "ר": "r", "ש": "sh", "ת": "t",
+  "ם": "m", "נ": "n", "ן": "n", "ס": "s", "ע": "e", "פ": "p", "ף": "p",
+  "צ": "tz", "ץ": "tz", "ק": "k", "ר": "r", "ש": "sh", "ת": "t", "ו": "u",
 }
 PENDING_ARTIST_KEY = "pending_artist"
+ARTISTS_MANAGE_KEY = "artists_manage"
+
+HELP_TEXT = (
+  "מה אפשר לעשות:\n\n"
+  'צור זמר "עדן בן זקן" + תמונה (בהודעה אחת)\n'
+  "או: קודם הטקסט, ואז תמונה\n\n"
+  "רשימת זמרים\n"
+  "← רשימה + מחיקה\n\n"
+  "מחק עדן בן זקן\n"
+  "← מוחק זמר ותמונה\n\n"
+  "פתיחה:\n"
+  "צור פתיחה | 3 שירים מוכרים | של 4 אקורדים | 5 דקות ללמוד | אקורדים בסיסיים בלבד\n\n"
+  "שיר:\n"
+  "דודו אהרון | שם השיר | Em,C,G,D"
+)
+
+WORD_SLUG_OVERRIDES = {
+  "עדן": "eden",
+  "בן": "ben",
+  "בת": "bat",
+  "זקן": "zaken",
+  "כהן": "cohen",
+  "לוי": "levi",
+  "אהרון": "aharon",
+  "יהודה": "yehuda",
+  "אב": "av",
+  "אם": "em",
+}
 
 
 def get_token() -> str:
@@ -74,9 +104,7 @@ async def deny_if_unauthorized(update: Update) -> bool:
     return False
   await update.effective_message.reply_text(
     "אין הרשאה לצ'אט הזה.\n"
-    f"ה-chat ID שלך: `{chat.id}`\n"
-    "הוסף אותו ל-TELEGRAM_ALLOWED_CHAT_IDS ב-.env",
-    parse_mode="Markdown",
+    f"מזהה הצ'אט שלך: {chat.id}"
   )
   return True
 
@@ -84,15 +112,15 @@ async def deny_if_unauthorized(update: Update) -> bool:
 def parse_song_request(text: str) -> tuple[str, str, list[str]]:
   """Parse: זמר | שיר | Em,C,G,D"""
   cleaned = text.strip()
-  if cleaned.lower().startswith("/add"):
-    cleaned = cleaned[4:].strip()
+  if cleaned.startswith("צור שיר"):
+    cleaned = cleaned[len("צור שיר") :].strip()
 
   parts = [part.strip() for part in cleaned.split("|")]
   if len(parts) != 3:
     raise ValueError(
       "פורמט לא תקין.\n"
       "כתוב: זמר | שיר | אקורדים\n"
-      'דוגמה: דודו אהרון | לילה טוב | Em,C,G,D'
+      "דוגמה: דודו אהרון | לילה טוב | Em,C,G,D"
     )
 
   artist, song, chords_raw = parts
@@ -104,6 +132,65 @@ def parse_song_request(text: str) -> tuple[str, str, list[str]]:
     raise ValueError(f"צריך 4–6 אקורדים, קיבלתי {len(chord_names)}.")
 
   return artist, song, chord_names
+
+
+def parse_intro_request(text: str) -> list[str] | None:
+  """Parse: צור פתיחה | שורה1 | שורה2 | שורה3 | שורה4"""
+  cleaned = text.strip()
+  if "|" not in cleaned:
+    return None
+
+  parts = [part.strip() for part in cleaned.split("|") if part.strip()]
+  if not parts:
+    return None
+
+  header = parts[0]
+  if header in ("צור פתיחה", "פתיחה"):
+    lines = parts[1:]
+  elif header.startswith("צור פתיחה"):
+    lines = parts[1:]
+  else:
+    return None
+
+  if len(lines) < 3:
+    raise ValueError(
+      "לפתיחה צריך לפחות 3 שורות.\n"
+      "דוגמה:\n"
+      "צור פתיחה | 3 שירים מוכרים | של 4 אקורדים | 5 דקות ללמוד"
+    )
+  if len(lines) > 4:
+    raise ValueError("לפתיחה יש מקסימום 4 שורות.")
+
+  return lines
+
+
+def save_intro_yaml(lines: list[str]) -> Path:
+  INTROS_DIR.mkdir(parents=True, exist_ok=True)
+  yaml_path = INTROS_DIR / "intro.yaml"
+  keys = ("line1", "line2", "line3", "line4")
+  rows = [f'{keys[i]}: "{lines[i]}"' for i in range(len(lines))]
+  rows.append('output: "output/intro.png"')
+  yaml_path.write_text("\n".join(rows) + "\n", encoding="utf-8")
+  return yaml_path
+
+
+def parse_create_artist(text: str) -> str | None:
+  """Parse: צור זמר "יהודה לוי" """
+  match = re.match(r"^צור\s+זמר\s+(.+)$", text.strip())
+  if not match:
+    return None
+  name = match.group(1).strip()
+  if len(name) >= 2 and name[0] == name[-1] and name[0] in "\"'«»":
+    name = name[1:-1].strip()
+  return name or None
+
+
+def is_list_artists_request(text: str) -> bool:
+  return text.strip() in ("רשימת זמרים", "זמרים", "הצג זמרים")
+
+
+def is_help_request(text: str) -> bool:
+  return text.strip().lower() in ("עזרה", "help", "?")
 
 
 def resolve_artist_or_hint_swap(config: dict, artist: str, song: str) -> Path:
@@ -118,22 +205,45 @@ def resolve_artist_or_hint_swap(config: dict, artist: str, song: str) -> Path:
   known = ", ".join(sorted(registry)) if registry else "(ריק)"
   raise ValueError(
     f"הזמר '{artist}' לא ברשימה.\n"
-    "שלח תמונה עם כיתוב שם הזמר, או /artist שם הזמר ואז תמונה.\n\n"
+    'צור אותו קודם: צור זמר "שם הזמר"\n\n'
     f"זמרים קיימים: {known}"
   )
 
 
-def artist_file_slug(name: str) -> str:
+def transliterate_word(word: str) -> str:
+  if word in WORD_SLUG_OVERRIDES:
+    return WORD_SLUG_OVERRIDES[word]
+
   parts: list[str] = []
-  for char in name.strip().lower():
+  for index, char in enumerate(word):
     if char in HEBREW_TO_LATIN:
-      parts.append(HEBREW_TO_LATIN[char])
+      value = HEBREW_TO_LATIN[char]
+      if char == "א" and index == 0:
+        value = "a"
+      parts.append(value)
     elif char.isalnum():
-      parts.append(char)
-    elif char in (" ", "-", "_"):
-      parts.append("_")
-  slug = re.sub(r"_+", "_", "".join(parts)).strip("_")
+      parts.append(char.lower())
+
+  slug = "".join(parts)
+  if word.endswith("ן") and slug.endswith("n") and len(slug) > 1:
+    slug = slug[:-1] + "en"
+  slug = re.sub(r"_+", "_", slug).strip("_")
+  return slug or "word"
+
+
+def artist_file_slug(name: str) -> str:
+  words = [part.strip() for part in name.strip().split() if part.strip()]
+  if not words:
+    return "artist"
+  slug = "_".join(transliterate_word(word) for word in words)
+  slug = re.sub(r"_+", "_", slug).strip("_")
   return slug or "artist"
+
+
+def save_config(config: dict) -> None:
+  with CONFIG_PATH.open("w", encoding="utf-8") as f:
+    json.dump(config, f, ensure_ascii=False, indent=2)
+    f.write("\n")
 
 
 def add_artist_to_config(artist: str, relative_path: str) -> None:
@@ -141,21 +251,69 @@ def add_artist_to_config(artist: str, relative_path: str) -> None:
     config = json.load(f)
   artists = config.setdefault("artists", {})
   artists[artist] = relative_path.replace("\\", "/")
-  with CONFIG_PATH.open("w", encoding="utf-8") as f:
-    json.dump(config, f, ensure_ascii=False, indent=2)
-    f.write("\n")
+  save_config(config)
 
 
-def parse_artist_name_from_caption(caption: str) -> str | None:
-  text = caption.strip()
-  if not text or "|" in text:
-    return None
-  if text.lower().startswith("/artist"):
-    name = text[7:].strip()
+def parse_delete_name(text: str) -> str | None:
+  cleaned = text.strip()
+  for prefix in ("מחק את ", "מחק "):
+    if cleaned.startswith(prefix):
+      name = cleaned[len(prefix) :].strip()
+      if len(name) >= 2 and name[0] == name[-1] and name[0] in "\"'«»":
+        name = name[1:-1].strip()
+      return name or None
+  if cleaned.startswith("מחק"):
+    name = cleaned[3:].strip()
+    if len(name) >= 2 and name[0] == name[-1] and name[0] in "\"'«»":
+      name = name[1:-1].strip()
     return name or None
-  if text.startswith("/"):
-    return None
-  return text
+  return None
+
+
+def find_artist_match(query: str, registry: dict[str, str]) -> str:
+  name = query.strip()
+  if len(name) >= 2 and name[0] == name[-1] and name[0] in "\"'«»":
+    name = name[1:-1].strip()
+  if not name:
+    raise ValueError("שלח שם זמר למחיקה.")
+  if name in registry:
+    return name
+
+  lowered = name.casefold()
+  exact_fold = [artist for artist in registry if artist.casefold() == lowered]
+  if len(exact_fold) == 1:
+    return exact_fold[0]
+  if len(exact_fold) > 1:
+    raise ValueError(f"כמה התאמות: {', '.join(exact_fold)}")
+
+  partial = [artist for artist in registry if name in artist or artist in name]
+  if len(partial) == 1:
+    return partial[0]
+  if len(partial) > 1:
+    raise ValueError(f"כמה התאמות: {', '.join(sorted(partial))}\nפרט את השם המלא.")
+
+  known = ", ".join(sorted(registry)) if registry else "(ריק)"
+  raise ValueError(f"הזמר '{name}' לא נמצא.\n\nזמרים קיימים: {known}")
+
+
+def remove_artist(name: str) -> tuple[str, str | None, bool]:
+  with CONFIG_PATH.open(encoding="utf-8") as f:
+    config = json.load(f)
+  registry: dict[str, str] = config.get("artists", {})
+  if name not in registry:
+    raise KeyError(name)
+
+  image_rel = registry.pop(name)
+  save_config(config)
+
+  image_deleted = False
+  if image_rel:
+    image_path = ROOT / image_rel
+    if image_path.is_file():
+      image_path.unlink()
+      image_deleted = True
+
+  return name, image_rel, image_deleted
 
 
 async def save_artist_photo(
@@ -173,8 +331,8 @@ async def save_artist_photo(
   context.user_data.pop(PENDING_ARTIST_KEY, None)
   await update.message.reply_text(
     f"נשמר: {name}\n"
-    f"תמונה: {relative}\n\n"
-    f"עכשיו שלח:\n{name} | שם השיר | Em,C,G,D"
+    f"קובץ: input/{slug}.png\n\n"
+    f"ליצירת שיר:\n{name} | שם השיר | Em,C,G,D"
   )
   log.info("Registered artist %s -> %s", name, image_path)
 
@@ -200,73 +358,31 @@ def make_slug(song: str) -> str:
   return slug or "song"
 
 
+async def reply_help(update: Update) -> None:
+  await update.message.reply_text(HELP_TEXT)
+
+
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
   if await deny_if_unauthorized(update):
     return
-  chat_id = update.effective_chat.id
   await update.message.reply_text(
-    "שלום! אני יוצר סליידים לטיקטוק.\n\n"
-    "זמר חדש: שלח תמונה עם כיתוב שם הזמר\n"
-    "או: /artist עידן עמדי ואז תמונה\n\n"
-    "שיר: זמר | שיר | Em,C,G,D\n"
-    "דוגמה: דודו אהרון | לילה טוב | Em,C,G,D\n\n"
-    f"ה-chat ID שלך: `{chat_id}`\n"
-    "שמור אותו ב-.env אם אתה מגביל גישה.",
-    parse_mode="Markdown",
+    "שלום! אני יוצר סליידים לטיקטוק.\n\n" + HELP_TEXT
   )
-
-
-async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-  if await deny_if_unauthorized(update):
-    return
-  await update.message.reply_text(
-    "פקודות:\n"
-    "/start — התחלה\n"
-    "/help — עזרה\n"
-    "/artists — רשימת זמרים\n"
-    "/artist שם — הוספת זמר (ואז תמונה)\n"
-    "/whoami — ה-chat ID שלך\n"
-    "/add זמר | שיר | אקורדים\n\n"
-    "זמר חדש (הכי קל): תמונה + כיתוב \"עידן עמדי\"\n\n"
-    "שיר: דודו אהרון | לילה טוב | Em,C,G,D"
-  )
-
-
-async def cmd_whoami(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-  chat_id = update.effective_chat.id
-  await update.message.reply_text(f"ה-chat ID שלך: `{chat_id}`", parse_mode="Markdown")
-
-
-async def cmd_artist(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-  if await deny_if_unauthorized(update):
-    return
-  args = context.args or []
-  if not args:
-    await update.message.reply_text(
-      "הוספת זמר חדש:\n\n"
-      "אופן 1 (הכי קל): שלח תמונה עם כיתוב שם הזמר\n"
-      "אופן 2: /artist עידן עמדי ואז שלח תמונה"
-    )
-    return
-  name = " ".join(args).strip()
-  context.user_data[PENDING_ARTIST_KEY] = name
-  await update.message.reply_text(f"מעולה. שלח עכשיו תמונה של {name}")
 
 
 async def on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
   if await deny_if_unauthorized(update):
     return
 
-  caption = update.message.caption or ""
-  name = parse_artist_name_from_caption(caption)
+  caption = (update.message.caption or "").strip()
+  name = parse_create_artist(caption) if caption else None
   if not name:
     name = context.user_data.get(PENDING_ARTIST_KEY)
 
   if not name:
     await update.message.reply_text(
-      "שלח תמונה עם כיתוב שם הזמר.\n"
-      "דוגמה: כיתוב על התמונה — עידן עמדי\n\n"
-      "או: /artist עידן עמדי ואז תמונה"
+      'שלח תמונה עם כיתוב:\nצור זמר "עדן בן זקן"\n\n'
+      'או קודם: צור זמר "עדן בן זקן" ואז תמונה.'
     )
     return
 
@@ -282,17 +398,91 @@ async def on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await status.edit_text(f"שגיאה בשמירה:\n{exc}")
 
 
-async def cmd_artists(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def show_artists(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
   if await deny_if_unauthorized(update):
     return
   config = load_config(CONFIG_PATH)
   registry = config.get("artists", {})
   if not registry:
-    await update.message.reply_text("אין זמרים ב-config.json")
+    context.user_data.pop(ARTISTS_MANAGE_KEY, None)
+    await update.message.reply_text("אין זמרים ברשימה.")
     return
-  lines = ["זמרים זמינים:"]
+
+  context.user_data[ARTISTS_MANAGE_KEY] = True
+  lines = ["זמרים:"]
   lines.extend(f"• {name}" for name in sorted(registry))
+  lines.append("")
+  lines.append("למחיקה — שלח: מחק שם הזמר")
   await update.message.reply_text("\n".join(lines))
+
+
+async def try_delete_artist(
+  update: Update,
+  context: ContextTypes.DEFAULT_TYPE,
+  query: str,
+) -> None:
+  config = load_config(CONFIG_PATH)
+  registry = config.get("artists", {})
+  if not registry:
+    context.user_data.pop(ARTISTS_MANAGE_KEY, None)
+    await update.message.reply_text("אין זמרים למחוק.")
+    return
+
+  artist = find_artist_match(query, registry)
+  removed, image_rel, image_deleted = remove_artist(artist)
+
+  image_note = ""
+  if image_deleted:
+    image_note = f"\nנמחקה גם התמונה: {image_rel}"
+  elif image_rel:
+    image_note = f"\nלא נמצאה תמונה: {image_rel}"
+
+  await update.message.reply_text(f"נמחק: {removed}{image_note}")
+  log.info("Removed artist %s (image_deleted=%s)", removed, image_deleted)
+
+  registry = load_config(CONFIG_PATH).get("artists", {})
+  if registry:
+    context.user_data[ARTISTS_MANAGE_KEY] = True
+    remaining = ["נשארו:"]
+    remaining.extend(f"• {name}" for name in sorted(registry))
+    remaining.append("\nלמחיקה נוספת — שלח: מחק שם הזמר")
+    await update.message.reply_text("\n".join(remaining))
+  else:
+    context.user_data.pop(ARTISTS_MANAGE_KEY, None)
+    await update.message.reply_text("הרשימה ריקה.")
+
+
+async def generate_intro_and_reply(update: Update, text: str) -> None:
+  if await deny_if_unauthorized(update):
+    return
+
+  status = await update.message.reply_text("מייצר פתיחה...")
+
+  try:
+    lines = parse_intro_request(text)
+    if not lines:
+      raise ValueError("פורמט פתיחה לא תקין.")
+
+    config = load_config(CONFIG_PATH)
+    output = OUTPUT_DIR / "intro.png"
+    save_intro_yaml(lines)
+
+    result = generate_intro_slide(
+      lines=lines,
+      background=None,
+      output=output,
+      config=config,
+    )
+
+    await status.delete()
+    await update.message.reply_photo(
+      photo=BytesIO(result.read_bytes()),
+      caption="פתיחה",
+    )
+    log.info("Created intro %s for chat %s", result, update.effective_chat.id)
+  except Exception as exc:
+    log.exception("Intro generation failed")
+    await status.edit_text(f"שגיאה:\n{exc}")
 
 
 async def generate_and_reply(update: Update, text: str) -> None:
@@ -330,21 +520,48 @@ async def generate_and_reply(update: Update, text: str) -> None:
     await status.edit_text(f"שגיאה:\n{exc}")
 
 
-async def cmd_add(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-  text = update.message.text or ""
-  if text.strip() == "/add":
-    await update.message.reply_text(
-      "כתוב אחרי /add:\n/add דודו אהרון | לילה טוב | Em,C,G,D"
-    )
-    return
-  await generate_and_reply(update, text)
-
-
 async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-  text = (update.message.text or "").strip()
-  if "|" not in text:
+  if await deny_if_unauthorized(update):
     return
-  await generate_and_reply(update, text)
+
+  text = (update.message.text or "").strip()
+  if not text:
+    return
+
+  if is_help_request(text):
+    await reply_help(update)
+    return
+
+  if is_list_artists_request(text):
+    await show_artists(update, context)
+    return
+
+  create_name = parse_create_artist(text)
+  if create_name:
+    context.user_data[PENDING_ARTIST_KEY] = create_name
+    context.user_data.pop(ARTISTS_MANAGE_KEY, None)
+    await update.message.reply_text(f"מעולה. שלח עכשיו תמונה של {create_name}")
+    return
+
+  if "|" in text:
+    context.user_data.pop(ARTISTS_MANAGE_KEY, None)
+    header = text.split("|", 1)[0].strip()
+    if header in ("צור פתיחה", "פתיחה") or header.startswith("צור פתיחה"):
+      await generate_intro_and_reply(update, text)
+    else:
+      await generate_and_reply(update, text)
+    return
+
+  delete_name = parse_delete_name(text)
+  in_manage = context.user_data.get(ARTISTS_MANAGE_KEY)
+  if delete_name or in_manage:
+    try:
+      await try_delete_artist(update, context, delete_name or text)
+    except ValueError as exc:
+      await update.message.reply_text(str(exc))
+    except Exception as exc:
+      log.exception("Failed to delete artist")
+      await update.message.reply_text(f"שגיאה במחיקה:\n{exc}")
 
 
 def main() -> None:
@@ -352,11 +569,6 @@ def main() -> None:
   app = Application.builder().token(token).build()
 
   app.add_handler(CommandHandler("start", cmd_start))
-  app.add_handler(CommandHandler("help", cmd_help))
-  app.add_handler(CommandHandler("whoami", cmd_whoami))
-  app.add_handler(CommandHandler("artists", cmd_artists))
-  app.add_handler(CommandHandler("artist", cmd_artist))
-  app.add_handler(CommandHandler("add", cmd_add))
   app.add_handler(MessageHandler(filters.PHOTO, on_photo))
   app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
 

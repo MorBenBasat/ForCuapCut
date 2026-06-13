@@ -9,10 +9,10 @@
     "דודו אהרון": "input/dudu_aharon.png",
     "אודיה": "input/Odeya.png",
     "עדן חסון": "input/eden_hason.png",
-    "אושר כהן": "input/osher_cohen.jpg",
+    "אושר כהן": "input/vshr_khn.png",
     "אייל גולן": "input/eyal_golan.png",
     "עידן עמדי": "input/idan amedi.png",
-    "אושרי כהן": "input/osher_cohen.jpg"
+    "עדן בן זקן": "input/eden_ben_zaken.png"
   },
   "fonts": {
     "bold": "C:/Windows/Fonts/arialbd.ttf",
@@ -51,13 +51,40 @@
     "horizontal_gap": 28,
     "center_offset_x": 30,
     "rows": {
-      "4": {"pattern": [2, 2], "top_y": 215, "bottom_y": -225},
-      "5": {"pattern": [3, 2], "top_y": 215, "bottom_y": -250},
-      "6": {"pattern": [3, 3], "top_y": 215, "bottom_y": -250}
+      "4": {
+        "pattern": [
+          2,
+          2
+        ],
+        "top_y": 215,
+        "bottom_y": -225
+      },
+      "5": {
+        "pattern": [
+          3,
+          2
+        ],
+        "top_y": 215,
+        "bottom_y": -250
+      },
+      "6": {
+        "pattern": [
+          3,
+          3
+        ],
+        "top_y": 215,
+        "bottom_y": -250
+      }
     }
   },
   "scale_reference_height": 1920,
   "intro": {
+    "overlay": {
+      "enabled": true,
+      "top_opacity": 0.42,
+      "bottom_opacity": 0.52,
+      "fade_ratio": 0.32
+    },
     "line_styles": [
       {
         "y": 300,

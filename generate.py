@@ -291,6 +291,29 @@ def load_yaml(path: Path) -> dict:
     return yaml.safe_load(f)
 
 
+def apply_intro_overlay(canvas: Image.Image, overlay_cfg: dict) -> Image.Image:
+  """Darken top/bottom so text reads cleanly on busy photo backgrounds."""
+  if not overlay_cfg.get("enabled", True):
+    return canvas
+
+  w, h = canvas.size
+  top_opacity = float(overlay_cfg.get("top_opacity", 0.42))
+  bottom_opacity = float(overlay_cfg.get("bottom_opacity", 0.52))
+  fade_ratio = float(overlay_cfg.get("fade_ratio", 0.32))
+  fade_h = max(1, int(h * fade_ratio))
+
+  overlay = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+  draw = ImageDraw.Draw(overlay)
+  for y in range(fade_h):
+    alpha = int(255 * top_opacity * (1 - y / fade_h))
+    draw.line([(0, y), (w, y)], fill=(0, 0, 0, alpha))
+  for y in range(h - fade_h, h):
+    alpha = int(255 * bottom_opacity * ((y - (h - fade_h)) / fade_h))
+    draw.line([(0, y), (w, y)], fill=(0, 0, 0, alpha))
+
+  return Image.alpha_composite(canvas.convert("RGBA"), overlay).convert("RGB")
+
+
 def collect_intro_lines(data: dict) -> list[str]:
   if "lines" in data:
     return [str(line) for line in data["lines"] if line]
@@ -327,6 +350,7 @@ def generate_intro_slide(
     raise FileNotFoundError(f"Background not found: {bg_path}")
 
   canvas = cover_resize(Image.open(bg_path).convert("RGB"), canvas_w, canvas_h)
+  canvas = apply_intro_overlay(canvas, intro_cfg.get("overlay", {}))
   draw = ImageDraw.Draw(canvas)
 
   for index, text in enumerate(lines):
