@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import re
+import shutil
 from io import BytesIO
 from pathlib import Path
 
@@ -56,6 +57,8 @@ HELP_TEXT = (
   "← מוחק זמר ותמונה\n\n"
   "פתיחה:\n"
   "צור פתיחה | 3 שירים מוכרים | של 4 אקורדים | 5 דקות ללמוד | אקורדים בסיסיים בלבד\n\n"
+  "סיום:\n"
+  "צור סיום | עוד שירים כאלה | כל שבוע | עקבו | כדי לא לפספס\n\n"
   "שיר:\n"
   "דודו אהרון | שם השיר | Em,C,G,D"
 )
@@ -134,8 +137,8 @@ def parse_song_request(text: str) -> tuple[str, str, list[str]]:
   return artist, song, chord_names
 
 
-def parse_intro_request(text: str) -> list[str] | None:
-  """Parse: צור פתיחה | שורה1 | שורה2 | שורה3 | שורה4"""
+def parse_text_slide_request(text: str, headers: tuple[str, ...]) -> list[str] | None:
+  """Parse: צור פתיחה/סיום | שורה1 | שורה2 | שורה3 | שורה4"""
   cleaned = text.strip()
   if "|" not in cleaned:
     return None
@@ -145,33 +148,49 @@ def parse_intro_request(text: str) -> list[str] | None:
     return None
 
   header = parts[0]
-  if header in ("צור פתיחה", "פתיחה"):
-    lines = parts[1:]
-  elif header.startswith("צור פתיחה"):
+  create_header = headers[0]
+  if header in headers or header.startswith(create_header):
     lines = parts[1:]
   else:
     return None
 
+  label = headers[-1]
   if len(lines) < 3:
     raise ValueError(
-      "לפתיחה צריך לפחות 3 שורות.\n"
+      f"ל{label} צריך לפחות 3 שורות.\n"
       "דוגמה:\n"
-      "צור פתיחה | 3 שירים מוכרים | של 4 אקורדים | 5 דקות ללמוד"
+      f"{create_header} | שורה 1 | שורה 2 | שורה 3"
     )
   if len(lines) > 4:
-    raise ValueError("לפתיחה יש מקסימום 4 שורות.")
+    raise ValueError(f"ל{label} יש מקסימום 4 שורות.")
 
   return lines
 
 
-def save_intro_yaml(lines: list[str]) -> Path:
+def parse_intro_request(text: str) -> list[str] | None:
+  return parse_text_slide_request(text, ("צור פתיחה", "פתיחה"))
+
+
+def parse_outro_request(text: str) -> list[str] | None:
+  return parse_text_slide_request(text, ("צור סיום", "סיום"))
+
+
+def save_text_slide_yaml(lines: list[str], *, yaml_name: str, output_name: str) -> Path:
   INTROS_DIR.mkdir(parents=True, exist_ok=True)
-  yaml_path = INTROS_DIR / "intro.yaml"
+  yaml_path = INTROS_DIR / yaml_name
   keys = ("line1", "line2", "line3", "line4")
   rows = [f'{keys[i]}: "{lines[i]}"' for i in range(len(lines))]
-  rows.append('output: "output/intro.png"')
+  rows.append(f'output: "output/{output_name}"')
   yaml_path.write_text("\n".join(rows) + "\n", encoding="utf-8")
   return yaml_path
+
+
+def save_intro_yaml(lines: list[str]) -> Path:
+  return save_text_slide_yaml(lines, yaml_name="intro.yaml", output_name="intro.png")
+
+
+def save_outro_yaml(lines: list[str]) -> Path:
+  return save_text_slide_yaml(lines, yaml_name="outro.yaml", output_name="outro.png")
 
 
 def parse_create_artist(text: str) -> str | None:
@@ -358,6 +377,34 @@ def make_slug(song: str) -> str:
   return slug or "song"
 
 
+def get_desktop_dir() -> Path:
+  """User Desktop — supports OneDrive-redirected Desktop on Windows."""
+  desktop = Path.home() / "Desktop"
+  if desktop.is_dir():
+    return desktop
+
+  onedrive = os.environ.get("OneDrive", "").strip()
+  if onedrive:
+    candidate = Path(onedrive) / "Desktop"
+    if candidate.is_dir():
+      return candidate
+
+  return desktop
+
+
+def safe_filename(name: str, ext: str = ".png") -> str:
+  sanitized = re.sub(r'[<>:"/\\|?*]', "_", name).strip()
+  return (sanitized or "song") + ext
+
+
+def copy_to_desktop(source: Path, dest_name: str) -> Path:
+  desktop = get_desktop_dir()
+  desktop.mkdir(parents=True, exist_ok=True)
+  dest = desktop / dest_name
+  shutil.copy2(source, dest)
+  return dest
+
+
 async def reply_help(update: Update) -> None:
   await update.message.reply_text(HELP_TEXT)
 
@@ -452,37 +499,76 @@ async def try_delete_artist(
     await update.message.reply_text("הרשימה ריקה.")
 
 
-async def generate_intro_and_reply(update: Update, text: str) -> None:
+async def generate_text_slide_and_reply(
+  update: Update,
+  text: str,
+  *,
+  parse_request,
+  save_yaml,
+  output_name: str,
+  status_label: str,
+  caption: str,
+  log_label: str,
+  slide_style: str = "intro",
+) -> None:
   if await deny_if_unauthorized(update):
     return
 
-  status = await update.message.reply_text("מייצר פתיחה...")
+  status = await update.message.reply_text(f"מייצר {status_label}...")
 
   try:
-    lines = parse_intro_request(text)
+    lines = parse_request(text)
     if not lines:
-      raise ValueError("פורמט פתיחה לא תקין.")
+      raise ValueError(f"פורמט {status_label} לא תקין.")
 
     config = load_config(CONFIG_PATH)
-    output = OUTPUT_DIR / "intro.png"
-    save_intro_yaml(lines)
+    output = OUTPUT_DIR / output_name
+    save_yaml(lines)
 
     result = generate_intro_slide(
       lines=lines,
       background=None,
       output=output,
       config=config,
+      slide_style=slide_style,
     )
 
     await status.delete()
     await update.message.reply_photo(
       photo=BytesIO(result.read_bytes()),
-      caption="פתיחה",
+      caption=caption,
     )
-    log.info("Created intro %s for chat %s", result, update.effective_chat.id)
+    log.info("Created %s %s for chat %s", log_label, result, update.effective_chat.id)
   except Exception as exc:
-    log.exception("Intro generation failed")
+    log.exception("%s generation failed", log_label.capitalize())
     await status.edit_text(f"שגיאה:\n{exc}")
+
+
+async def generate_intro_and_reply(update: Update, text: str) -> None:
+  await generate_text_slide_and_reply(
+    update,
+    text,
+    parse_request=parse_intro_request,
+    save_yaml=save_intro_yaml,
+    output_name="intro.png",
+    status_label="פתיחה",
+    caption="פתיחה",
+    log_label="intro",
+  )
+
+
+async def generate_outro_and_reply(update: Update, text: str) -> None:
+  await generate_text_slide_and_reply(
+    update,
+    text,
+    parse_request=parse_outro_request,
+    save_yaml=save_outro_yaml,
+    output_name="outro.png",
+    status_label="סיום",
+    caption="סיום",
+    log_label="outro",
+    slide_style="outro",
+  )
 
 
 async def generate_and_reply(update: Update, text: str) -> None:
@@ -509,12 +595,14 @@ async def generate_and_reply(update: Update, text: str) -> None:
       config=config,
     )
 
+    desktop_path = copy_to_desktop(result, safe_filename(song))
+
     await status.delete()
     await update.message.reply_photo(
       photo=BytesIO(result.read_bytes()),
-      caption=f"{artist} — {song}",
+      caption=f"{artist} — {song}\n\nנשמר גם בשולחן העבודה:\n{desktop_path.name}",
     )
-    log.info("Created %s for chat %s", result, update.effective_chat.id)
+    log.info("Created %s for chat %s, copied to %s", result, update.effective_chat.id, desktop_path)
   except Exception as exc:
     log.exception("Generation failed")
     await status.edit_text(f"שגיאה:\n{exc}")
@@ -548,6 +636,8 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     header = text.split("|", 1)[0].strip()
     if header in ("צור פתיחה", "פתיחה") or header.startswith("צור פתיחה"):
       await generate_intro_and_reply(update, text)
+    elif header in ("צור סיום", "סיום") or header.startswith("צור סיום"):
+      await generate_outro_and_reply(update, text)
     else:
       await generate_and_reply(update, text)
     return

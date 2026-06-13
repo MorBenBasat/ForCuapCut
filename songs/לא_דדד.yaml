@@ -1,0 +1,9 @@
+artist: "דודו אהרון"
+song: "לא דדד"
+chords:
+  - AM
+  - G
+  - DM
+  - F
+  - C
+output: "output/לא_דדד.png"

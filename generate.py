@@ -8,7 +8,7 @@ import json
 import sys
 from pathlib import Path
 
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageEnhance, ImageFont
 from bidi.algorithm import get_display
 
 ROOT = Path(__file__).resolve().parent
@@ -291,6 +291,46 @@ def load_yaml(path: Path) -> dict:
     return yaml.safe_load(f)
 
 
+def _parse_hex_color(value: str) -> tuple[int, int, int]:
+  value = value.lstrip("#")
+  if len(value) != 6:
+    raise ValueError(f"Expected #RRGGBB color, got {value!r}")
+  return int(value[0:2], 16), int(value[2:4], 16), int(value[4:6], 16)
+
+
+def apply_intro_color_grade(canvas: Image.Image, grade_cfg: dict) -> Image.Image:
+  """Boost saturation/contrast and add a warm tint for a livelier intro."""
+  if not grade_cfg.get("enabled", True):
+    return canvas
+
+  img = canvas
+  if grade_cfg.get("grayscale", False):
+    img = img.convert("L").convert("RGB")
+
+  saturation = float(grade_cfg.get("saturation", 1.0))
+  contrast = float(grade_cfg.get("contrast", 1.0))
+  brightness = float(grade_cfg.get("brightness", 1.0))
+  if saturation != 1.0:
+    img = ImageEnhance.Color(img).enhance(saturation)
+  if contrast != 1.0:
+    img = ImageEnhance.Contrast(img).enhance(contrast)
+  if brightness != 1.0:
+    img = ImageEnhance.Brightness(img).enhance(brightness)
+
+  if grade_cfg.get("grayscale", False):
+    return img
+
+  warm_tint = grade_cfg.get("warm_tint") or {}
+  tint_opacity = float(warm_tint.get("opacity", 0))
+  if tint_opacity > 0:
+    tint_rgb = _parse_hex_color(warm_tint.get("color", "#FF8A00"))
+    w, h = img.size
+    tint_layer = Image.new("RGBA", (w, h), (*tint_rgb, int(255 * tint_opacity)))
+    img = Image.alpha_composite(img.convert("RGBA"), tint_layer).convert("RGB")
+
+  return img
+
+
 def apply_intro_overlay(canvas: Image.Image, overlay_cfg: dict) -> Image.Image:
   """Darken top/bottom so text reads cleanly on busy photo backgrounds."""
   if not overlay_cfg.get("enabled", True):
@@ -301,15 +341,16 @@ def apply_intro_overlay(canvas: Image.Image, overlay_cfg: dict) -> Image.Image:
   bottom_opacity = float(overlay_cfg.get("bottom_opacity", 0.52))
   fade_ratio = float(overlay_cfg.get("fade_ratio", 0.32))
   fade_h = max(1, int(h * fade_ratio))
+  edge_rgb = _parse_hex_color(overlay_cfg.get("edge_color", "#000000"))
 
   overlay = Image.new("RGBA", (w, h), (0, 0, 0, 0))
   draw = ImageDraw.Draw(overlay)
   for y in range(fade_h):
     alpha = int(255 * top_opacity * (1 - y / fade_h))
-    draw.line([(0, y), (w, y)], fill=(0, 0, 0, alpha))
+    draw.line([(0, y), (w, y)], fill=(*edge_rgb, alpha))
   for y in range(h - fade_h, h):
     alpha = int(255 * bottom_opacity * ((y - (h - fade_h)) / fade_h))
-    draw.line([(0, y), (w, y)], fill=(0, 0, 0, alpha))
+    draw.line([(0, y), (w, y)], fill=(*edge_rgb, alpha))
 
   return Image.alpha_composite(canvas.convert("RGBA"), overlay).convert("RGB")
 
@@ -332,11 +373,12 @@ def generate_intro_slide(
   background: Path | None,
   output: Path,
   config: dict,
+  slide_style: str = "intro",
 ) -> Path:
   canvas_w = config["canvas"]["width"]
   canvas_h = config["canvas"]["height"]
-  intro_cfg = config["intro"]
-  style_templates = intro_cfg["line_styles"]
+  slide_cfg = config.get(slide_style, config["intro"])
+  style_templates = slide_cfg["line_styles"]
 
   if len(lines) > len(style_templates):
     raise ValueError(f"Intro supports up to {len(style_templates)} lines")
@@ -350,7 +392,8 @@ def generate_intro_slide(
     raise FileNotFoundError(f"Background not found: {bg_path}")
 
   canvas = cover_resize(Image.open(bg_path).convert("RGB"), canvas_w, canvas_h)
-  canvas = apply_intro_overlay(canvas, intro_cfg.get("overlay", {}))
+  canvas = apply_intro_color_grade(canvas, slide_cfg.get("color_grade", {}))
+  canvas = apply_intro_overlay(canvas, slide_cfg.get("overlay", {}))
   draw = ImageDraw.Draw(canvas)
 
   for index, text in enumerate(lines):
@@ -376,6 +419,15 @@ def generate_intro_slide(
 
 def is_intro_yaml(data: dict) -> bool:
   return "chords" not in data and ("line1" in data or "lines" in data)
+
+
+def resolve_text_slide_style(data: dict, song_path: Path) -> str:
+  if data.get("slide_style") in ("intro", "outro"):
+    return data["slide_style"]
+  output = str(data.get("output", "")).lower()
+  if "outro" in output or song_path.stem == "outro":
+    return "outro"
+  return "intro"
 
 
 def main() -> None:
@@ -411,6 +463,7 @@ def main() -> None:
         background=background,
         output=output,
         config=config,
+        slide_style=resolve_text_slide_style(data, song_path),
       )
       print(f"Created: {result}")
       return

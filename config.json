@@ -79,48 +79,112 @@
   },
   "scale_reference_height": 1920,
   "intro": {
+    "color_grade": {
+      "enabled": true,
+      "saturation": 1.38,
+      "contrast": 1.14,
+      "brightness": 1.06,
+      "warm_tint": {
+        "color": "#FF9A2E",
+        "opacity": 0.14
+      }
+    },
     "overlay": {
       "enabled": true,
-      "top_opacity": 0.42,
-      "bottom_opacity": 0.52,
-      "fade_ratio": 0.32
+      "top_opacity": 0.34,
+      "bottom_opacity": 0.44,
+      "fade_ratio": 0.30,
+      "edge_color": "#2A1200"
     },
     "line_styles": [
       {
         "y": 300,
         "font_size": 110,
-        "color": "#FFFFFF",
-        "stroke_color": "#000000",
+        "color": "#FFFDF5",
+        "stroke_color": "#1A0A00",
         "stroke_width": 5,
-        "shadow_color": "#000000",
-        "shadow_offset": 3
+        "shadow_color": "#FF6B00",
+        "shadow_offset": 4
       },
       {
         "y": 430,
         "font_size": 110,
-        "color": "#FFEB3B",
-        "stroke_color": "#000000",
+        "color": "#FFD54F",
+        "stroke_color": "#1A0A00",
         "stroke_width": 5,
-        "shadow_color": "#000000",
-        "shadow_offset": 3
+        "shadow_color": "#FF6B00",
+        "shadow_offset": 4
       },
       {
         "y": 1240,
         "font_size": 100,
-        "color": "#FFFFFF",
-        "stroke_color": "#000000",
+        "color": "#FFFDF5",
+        "stroke_color": "#1A0A00",
         "stroke_width": 5,
-        "shadow_color": "#000000",
-        "shadow_offset": 3
+        "shadow_color": "#FF6B00",
+        "shadow_offset": 4
       },
       {
         "y": 1360,
         "font_size": 100,
-        "color": "#FFEB3B",
-        "stroke_color": "#000000",
+        "color": "#FFD54F",
+        "stroke_color": "#1A0A00",
         "stroke_width": 5,
-        "shadow_color": "#000000",
-        "shadow_offset": 3
+        "shadow_color": "#FF6B00",
+        "shadow_offset": 4
+      }
+    ]
+  },
+  "outro": {
+    "color_grade": {
+      "enabled": true,
+      "grayscale": true,
+      "contrast": 1.22,
+      "brightness": 1.04
+    },
+    "overlay": {
+      "enabled": true,
+      "top_opacity": 0.38,
+      "bottom_opacity": 0.48,
+      "fade_ratio": 0.30,
+      "edge_color": "#000000"
+    },
+    "line_styles": [
+      {
+        "y": 300,
+        "font_size": 110,
+        "color": "#FFFDF5",
+        "stroke_color": "#1A0A00",
+        "stroke_width": 5,
+        "shadow_color": "#FF6B00",
+        "shadow_offset": 4
+      },
+      {
+        "y": 430,
+        "font_size": 110,
+        "color": "#FFD54F",
+        "stroke_color": "#1A0A00",
+        "stroke_width": 5,
+        "shadow_color": "#FF6B00",
+        "shadow_offset": 4
+      },
+      {
+        "y": 1240,
+        "font_size": 100,
+        "color": "#FFFDF5",
+        "stroke_color": "#1A0A00",
+        "stroke_width": 5,
+        "shadow_color": "#FF6B00",
+        "shadow_offset": 4
+      },
+      {
+        "y": 1360,
+        "font_size": 100,
+        "color": "#FFD54F",
+        "stroke_color": "#1A0A00",
+        "stroke_width": 5,
+        "shadow_color": "#FF6B00",
+        "shadow_offset": 4
       }
     ]
   }
