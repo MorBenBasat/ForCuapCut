@@ -47,8 +47,18 @@
     }
   },
   "chord_grid": {
-    "scale": 18.5,
+    "scale": 19.5,
     "horizontal_gap": 28,
+    "labels": {
+      "enabled": true,
+      "font_size": 42,
+      "color": "#FFEB3B",
+      "stroke_color": "#000000",
+      "stroke_width": 4,
+      "shadow_color": "#000000",
+      "shadow_offset": 2,
+      "gap_above": 8
+    },
     "center_offset_x": 30,
     "rows": {
       "4": {
@@ -78,16 +88,12 @@
     }
   },
   "scale_reference_height": 1920,
+  "song": {
+    "grayscale_background": true
+  },
   "intro": {
     "color_grade": {
-      "enabled": true,
-      "saturation": 1.38,
-      "contrast": 1.14,
-      "brightness": 1.06,
-      "warm_tint": {
-        "color": "#FF9A2E",
-        "opacity": 0.14
-      }
+      "enabled": false
     },
     "overlay": {
       "enabled": true,
@@ -137,10 +143,7 @@
   },
   "outro": {
     "color_grade": {
-      "enabled": true,
-      "grayscale": true,
-      "contrast": 1.22,
-      "brightness": 1.04
+      "enabled": false
     },
     "overlay": {
       "enabled": true,

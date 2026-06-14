@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import re
+import asyncio
 import shutil
 from io import BytesIO
 from pathlib import Path
@@ -21,7 +22,12 @@ from generate import (
   generate_song_slide,
   load_config,
   resolve_artist_image,
-  song_slug,
+)
+from whatsapp_client import (
+  WhatsAppError,
+  is_auto_send_enabled,
+  is_whatsapp_enabled,
+  send_video_to_whatsapp,
 )
 
 load_dotenv(ROOT / ".env")
@@ -33,7 +39,6 @@ logging.basicConfig(
 log = logging.getLogger("forcuapcut.bot")
 
 CONFIG_PATH = ROOT / "config.json"
-SONGS_DIR = ROOT / "songs"
 INTROS_DIR = ROOT / "intros"
 OUTPUT_DIR = ROOT / "output"
 INPUT_DIR = ROOT / "input"
@@ -60,7 +65,10 @@ HELP_TEXT = (
   "סיום:\n"
   "צור סיום | עוד שירים כאלה | כל שבוע | עקבו | כדי לא לפספס\n\n"
   "שיר:\n"
-  "דודו אהרון | שם השיר | Em,C,G,D"
+  "דודו אהרון | שם השיר | Em,C,G,D\n\n"
+  "ווצאפ (אחרי שנוצר סרטון):\n"
+  "שלח את קובץ ה-MP4 לבוט — יישלח אוטומטית\n"
+  "או: שלח לווצאפ (שולח את ה-MP4 האחרון מ-output/)"
 )
 
 WORD_SLUG_OVERRIDES = {
@@ -356,27 +364,6 @@ async def save_artist_photo(
   log.info("Registered artist %s -> %s", name, image_path)
 
 
-def save_song_yaml(slug: str, artist: str, song: str, chord_names: list[str], output: Path) -> Path:
-  SONGS_DIR.mkdir(parents=True, exist_ok=True)
-  yaml_path = SONGS_DIR / f"{slug}.yaml"
-  lines = [
-    f'artist: "{artist}"',
-    f'song: "{song}"',
-    "chords:",
-    *[f"  - {name}" for name in chord_names],
-    f'output: "{output.as_posix()}"',
-    "",
-  ]
-  yaml_path.write_text("\n".join(lines), encoding="utf-8")
-  return yaml_path
-
-
-def make_slug(song: str) -> str:
-  slug = song_slug(song)
-  slug = re.sub(r"[^\w\u0590-\u05FF-]", "", slug, flags=re.UNICODE)
-  return slug or "song"
-
-
 def get_desktop_dir() -> Path:
   """User Desktop — supports OneDrive-redirected Desktop on Windows."""
   desktop = Path.home() / "Desktop"
@@ -397,12 +384,122 @@ def safe_filename(name: str, ext: str = ".png") -> str:
   return (sanitized or "song") + ext
 
 
-def copy_to_desktop(source: Path, dest_name: str) -> Path:
-  desktop = get_desktop_dir()
-  desktop.mkdir(parents=True, exist_ok=True)
-  dest = desktop / dest_name
-  shutil.copy2(source, dest)
-  return dest
+def find_latest_video() -> Path | None:
+  if not OUTPUT_DIR.is_dir():
+    return None
+  videos = sorted(
+    OUTPUT_DIR.glob("*.mp4"),
+    key=lambda path: path.stat().st_mtime,
+    reverse=True,
+  )
+  return videos[0] if videos else None
+
+
+def is_send_whatsapp_request(text: str) -> bool:
+  cleaned = text.strip().lower()
+  return cleaned in (
+    "שלח לווצאפ",
+    "שלח ווצאפ",
+    "שלח סרטון לווצאפ",
+    "whatsapp",
+  )
+
+
+async def deliver_video_to_whatsapp(
+  update: Update,
+  video_path: Path,
+  *,
+  caption: str = "",
+) -> None:
+  if not is_whatsapp_enabled():
+    await update.message.reply_text(
+      "ווצאפ לא מוגדר.\n"
+      "הוסף ל-.env:\n"
+      "WHATSAPP_ACCESS_TOKEN\n"
+      "WHATSAPP_PHONE_NUMBER_ID\n"
+      "WHATSAPP_RECIPIENT"
+    )
+    return
+
+  status = await update.message.reply_text("שולח לווצאפ...")
+  try:
+    note = await asyncio.to_thread(
+      send_video_to_whatsapp,
+      video_path,
+      caption=caption,
+    )
+    await status.edit_text(f"{note}\n{video_path.name}")
+  except (WhatsAppError, OSError) as exc:
+    log.exception("WhatsApp send failed")
+    await status.edit_text(f"שגיאה בשליחה לווצאפ:\n{exc}")
+
+
+async def on_video(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+  if await deny_if_unauthorized(update):
+    return
+
+  caption = (update.message.caption or "").strip()
+
+  video = update.message.video
+  if video is None:
+    await update.message.reply_text("לא התקבל קובץ וידאו.")
+    return
+
+  status = await update.message.reply_text("מוריד את הסרטון...")
+  try:
+    tg_file = await context.bot.get_file(video.file_id)
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    filename = safe_filename(video.file_name or "video", ".mp4")
+    if not filename.lower().endswith(".mp4"):
+      filename = safe_filename("video", ".mp4")
+    video_path = OUTPUT_DIR / filename
+    video_bytes = bytes(await tg_file.download_as_bytearray())
+    video_path.write_bytes(video_bytes)
+    await status.delete()
+
+    await update.message.reply_text(f"נשמר: {video_path.name}")
+
+    if is_auto_send_enabled():
+      await deliver_video_to_whatsapp(update, video_path, caption=caption)
+    elif not is_whatsapp_enabled():
+      pass
+    else:
+      await update.message.reply_text(
+        "לשליחה לווצאפ — הוסף WHATSAPP_AUTO_SEND=true ל-.env\n"
+        "או שלח: שלח לווצאפ"
+      )
+  except Exception as exc:
+    log.exception("Failed to handle video upload")
+    await status.edit_text(f"שגיאה:\n{exc}")
+
+
+async def on_document(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+  if await deny_if_unauthorized(update):
+    return
+
+  document = update.message.document
+  if document is None:
+    return
+
+  name = (document.file_name or "").lower()
+  if not name.endswith(".mp4"):
+    return
+
+  status = await update.message.reply_text("מוריד MP4...")
+  try:
+    tg_file = await context.bot.get_file(document.file_id)
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    video_path = OUTPUT_DIR / Path(document.file_name).name
+    video_path.write_bytes(bytes(await tg_file.download_as_bytearray()))
+    await status.delete()
+    await update.message.reply_text(f"נשמר: {video_path.name}")
+
+    caption = (update.message.caption or "").strip()
+    if is_auto_send_enabled() or is_send_whatsapp_request(caption):
+      await deliver_video_to_whatsapp(update, video_path, caption="")
+  except Exception as exc:
+    log.exception("Failed to handle MP4 document")
+    await status.edit_text(f"שגיאה:\n{exc}")
 
 
 async def reply_help(update: Update) -> None:
@@ -533,10 +630,15 @@ async def generate_text_slide_and_reply(
       slide_style=slide_style,
     )
 
+    desktop_dir = get_desktop_dir()
+    desktop_dir.mkdir(parents=True, exist_ok=True)
+    desktop_path = desktop_dir / output_name
+    shutil.copy2(result, desktop_path)
+
     await status.delete()
     await update.message.reply_photo(
       photo=BytesIO(result.read_bytes()),
-      caption=caption,
+      caption=f"{caption}\n\nנשמר בשולחן העבודה:\n{desktop_path.name}",
     )
     log.info("Created %s %s for chat %s", log_label, result, update.effective_chat.id)
   except Exception as exc:
@@ -581,9 +683,9 @@ async def generate_and_reply(update: Update, text: str) -> None:
     artist, song, chord_names = parse_song_request(text)
     config = load_config(CONFIG_PATH)
     artist_image = resolve_artist_or_hint_swap(config, artist, song)
-    slug = make_slug(song)
-    output = OUTPUT_DIR / f"{slug}.png"
-    save_song_yaml(slug, artist, song, chord_names, Path("output") / f"{slug}.png")
+    desktop_dir = get_desktop_dir()
+    desktop_dir.mkdir(parents=True, exist_ok=True)
+    output = desktop_dir / safe_filename(song)
 
     result = generate_song_slide(
       artist=artist,
@@ -595,14 +697,12 @@ async def generate_and_reply(update: Update, text: str) -> None:
       config=config,
     )
 
-    desktop_path = copy_to_desktop(result, safe_filename(song))
-
     await status.delete()
     await update.message.reply_photo(
       photo=BytesIO(result.read_bytes()),
-      caption=f"{artist} — {song}\n\nנשמר גם בשולחן העבודה:\n{desktop_path.name}",
+      caption=f"{artist} — {song}\n\nנשמר בשולחן העבודה:\n{result.name}",
     )
-    log.info("Created %s for chat %s, copied to %s", result, update.effective_chat.id, desktop_path)
+    log.info("Created %s for chat %s", result, update.effective_chat.id)
   except Exception as exc:
     log.exception("Generation failed")
     await status.edit_text(f"שגיאה:\n{exc}")
@@ -618,6 +718,17 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
   if is_help_request(text):
     await reply_help(update)
+    return
+
+  if is_send_whatsapp_request(text):
+    latest = find_latest_video()
+    if latest is None:
+      await update.message.reply_text(
+        "לא נמצא MP4 בתיקיית output/.\n"
+        "שלח קובץ וידאו לבוט, או שמור סרטון ב-output/"
+      )
+      return
+    await deliver_video_to_whatsapp(update, latest)
     return
 
   if is_list_artists_request(text):
@@ -660,6 +771,8 @@ def main() -> None:
 
   app.add_handler(CommandHandler("start", cmd_start))
   app.add_handler(MessageHandler(filters.PHOTO, on_photo))
+  app.add_handler(MessageHandler(filters.VIDEO, on_video))
+  app.add_handler(MessageHandler(filters.Document.VIDEO | filters.Document.MimeType("video/mp4"), on_document))
   app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
 
   log.info("Bot starting...")

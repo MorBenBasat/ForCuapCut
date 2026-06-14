@@ -202,6 +202,8 @@ def generate_song_slide(
     chords_dir = ROOT / chords_dir
 
   canvas = cover_resize(Image.open(bg_path).convert("RGB"), canvas_w, canvas_h)
+  if config.get("song", {}).get("grayscale_background", False):
+    canvas = canvas.convert("L").convert("RGB")
 
   # Singer placement
   singer_cfg = config["singer"]
@@ -243,8 +245,33 @@ def generate_song_slide(
   for chord_img, (tx, ty) in zip(chord_images, positions, strict=True):
     canvas.paste(chord_img, (tx, ty), chord_img)
 
-  # Text layers: X centered, Y from top (CapCut text values)
   draw = ImageDraw.Draw(canvas)
+
+  labels_cfg = grid_cfg.get("labels", {})
+  if labels_cfg.get("enabled", False):
+    label_font_size = int(labels_cfg.get("font_size", 42))
+    label_font = load_font(config, label_font_size)
+    stroke_width = int(labels_cfg.get("stroke_width", 0))
+    gap_above = int(labels_cfg.get("gap_above", 8))
+    sample_bbox = draw.textbbox((0, 0), "8", font=label_font, stroke_width=stroke_width)
+    label_h = sample_bbox[3] - sample_bbox[1]
+    for number, ((tx, ty), (cw, _ch)) in enumerate(
+      zip(positions, chord_sizes, strict=True), start=1
+    ):
+      draw_text_centered(
+        draw,
+        str(number),
+        tx + cw // 2,
+        ty - gap_above - label_h,
+        label_font,
+        labels_cfg.get("color", "#FFEB3B"),
+        labels_cfg.get("shadow_color", "#000000"),
+        int(labels_cfg.get("shadow_offset", 0)),
+        labels_cfg.get("stroke_color"),
+        stroke_width,
+      )
+
+  # Text layers: X centered, Y from top (CapCut text values)
   text_cfg = config["text"]
 
   artist_cfg = text_cfg["artist"]
