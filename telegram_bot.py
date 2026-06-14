@@ -21,7 +21,10 @@ from generate import (
   generate_intro_slide,
   generate_song_slide,
   load_config,
+  normalize_difficulty,
   resolve_artist_image,
+  save_session_difficulty,
+  load_session_difficulty,
 )
 from whatsapp_client import (
   WhatsAppError,
@@ -61,11 +64,15 @@ HELP_TEXT = (
   "מחק עדן בן זקן\n"
   "← מוחק זמר ותמונה\n\n"
   "פתיחה:\n"
-  "צור פתיחה | 3 שירים מוכרים | של 4 אקורדים | 5 דקות ללמוד | אקורדים בסיסיים בלבד\n\n"
+  "צור פתיחה | 3 שירים מוכרים | 7 דקות ללמוד | אקורדים בסיסיים בלבד\n"
+  "רמה: קל\n"
+  "(רמה: קל / בינוני / קשה — בשורה נפרדת, לא קשור לטקסט)\n\n"
   "סיום:\n"
   "צור סיום | עוד שירים כאלה | כל שבוע | עקבו | כדי לא לפספס\n\n"
   "שיר:\n"
-  "דודו אהרון | שם השיר | Em,C,G,D\n\n"
+  "דודו אהרון | שם השיר | Em,C,G,D\n"
+  "רמה: קשה\n"
+  "(רמה אופציונלית — בשורה נפרדת; אם חסר, נלקח מהפתיחה האחרונה)\n\n"
   "ווצאפ (אחרי שנוצר סרטון):\n"
   "שלח את קובץ ה-MP4 לבוט — יישלח אוטומטית\n"
   "או: שלח לווצאפ (שולח את ה-MP4 האחרון מ-output/)"
@@ -120,9 +127,9 @@ async def deny_if_unauthorized(update: Update) -> bool:
   return True
 
 
-def parse_song_request(text: str) -> tuple[str, str, list[str]]:
-  """Parse: זמר | שיר | Em,C,G,D"""
-  cleaned = text.strip()
+def parse_song_request(text: str) -> tuple[str, str, list[str], str | None]:
+  """Parse: זמר | שיר | Em,C,G,D  (+ optional רמה: קל on separate line)"""
+  cleaned, difficulty = extract_difficulty_from_text(text.strip())
   if cleaned.startswith("צור שיר"):
     cleaned = cleaned[len("צור שיר") :].strip()
 
@@ -131,7 +138,8 @@ def parse_song_request(text: str) -> tuple[str, str, list[str]]:
     raise ValueError(
       "פורמט לא תקין.\n"
       "כתוב: זמר | שיר | אקורדים\n"
-      "דוגמה: דודו אהרון | לילה טוב | Em,C,G,D"
+      "דוגמה: דודו אהרון | לילה טוב | Em,C,G,D\n"
+      "רמה: קשה"
     )
 
   artist, song, chords_raw = parts
@@ -142,7 +150,31 @@ def parse_song_request(text: str) -> tuple[str, str, list[str]]:
   if not (4 <= len(chord_names) <= 6):
     raise ValueError(f"צריך 4–6 אקורדים, קיבלתי {len(chord_names)}.")
 
-  return artist, song, chord_names
+  return artist, song, chord_names, difficulty
+
+
+def parse_difficulty_line(line: str) -> str | None:
+  match = re.match(r"^רמה\s*:\s*(.+)$", line.strip(), re.IGNORECASE)
+  if not match:
+    return None
+  raw = match.group(1).strip()
+  level = normalize_difficulty(raw)
+  if not level:
+    raise ValueError(f"רמה לא תקינה: {raw}\nהשתמש: קל / בינוני / קשה")
+  return level
+
+
+def extract_difficulty_from_text(text: str) -> tuple[str, str | None]:
+  """Remove 'רמה: קל' lines; return cleaned text and difficulty."""
+  difficulty = None
+  kept_lines: list[str] = []
+  for line in text.splitlines():
+    level = parse_difficulty_line(line)
+    if level:
+      difficulty = level
+      continue
+    kept_lines.append(line)
+  return "\n".join(kept_lines).strip(), difficulty
 
 
 def parse_text_slide_request(text: str, headers: tuple[str, ...]) -> list[str] | None:
@@ -175,26 +207,43 @@ def parse_text_slide_request(text: str, headers: tuple[str, ...]) -> list[str] |
   return lines
 
 
-def parse_intro_request(text: str) -> list[str] | None:
-  return parse_text_slide_request(text, ("צור פתיחה", "פתיחה"))
+def parse_intro_request(text: str) -> tuple[list[str], str | None] | None:
+  cleaned, difficulty = extract_difficulty_from_text(text)
+  lines = parse_text_slide_request(cleaned, ("צור פתיחה", "פתיחה"))
+  if lines is None:
+    return None
+  return lines, difficulty
 
 
 def parse_outro_request(text: str) -> list[str] | None:
   return parse_text_slide_request(text, ("צור סיום", "סיום"))
 
 
-def save_text_slide_yaml(lines: list[str], *, yaml_name: str, output_name: str) -> Path:
+def save_text_slide_yaml(
+  lines: list[str],
+  *,
+  yaml_name: str,
+  output_name: str,
+  difficulty: str | None = None,
+) -> Path:
   INTROS_DIR.mkdir(parents=True, exist_ok=True)
   yaml_path = INTROS_DIR / yaml_name
   keys = ("line1", "line2", "line3", "line4")
   rows = [f'{keys[i]}: "{lines[i]}"' for i in range(len(lines))]
+  if difficulty:
+    rows.append(f'difficulty: "{difficulty}"')
   rows.append(f'output: "output/{output_name}"')
   yaml_path.write_text("\n".join(rows) + "\n", encoding="utf-8")
   return yaml_path
 
 
-def save_intro_yaml(lines: list[str]) -> Path:
-  return save_text_slide_yaml(lines, yaml_name="intro.yaml", output_name="intro.png")
+def save_intro_yaml(lines: list[str], *, difficulty: str | None = None) -> Path:
+  return save_text_slide_yaml(
+    lines,
+    yaml_name="intro.yaml",
+    output_name="intro.png",
+    difficulty=difficulty,
+  )
 
 
 def save_outro_yaml(lines: list[str]) -> Path:
@@ -647,16 +696,56 @@ async def generate_text_slide_and_reply(
 
 
 async def generate_intro_and_reply(update: Update, text: str) -> None:
-  await generate_text_slide_and_reply(
-    update,
-    text,
-    parse_request=parse_intro_request,
-    save_yaml=save_intro_yaml,
-    output_name="intro.png",
-    status_label="פתיחה",
-    caption="פתיחה",
-    log_label="intro",
-  )
+  if await deny_if_unauthorized(update):
+    return
+
+  status = await update.message.reply_text("מייצר פתיחה...")
+
+  try:
+    parsed = parse_intro_request(text)
+    if not parsed:
+      raise ValueError("פורמט פתיחה לא תקין.")
+
+    lines, difficulty = parsed
+    if not difficulty:
+      raise ValueError(
+        "חסרה רמת קושי.\n"
+        "הוסף בשורה נפרדת:\n"
+        "רמה: קל\n"
+        f"או: רמה: בינוני / רמה: קשה"
+      )
+
+    config = load_config(CONFIG_PATH)
+    output = OUTPUT_DIR / "intro.png"
+    save_intro_yaml(lines, difficulty=difficulty)
+    save_session_difficulty(difficulty)
+
+    result = generate_intro_slide(
+      lines=lines,
+      background=None,
+      output=output,
+      config=config,
+      slide_style="intro",
+      difficulty=difficulty,
+    )
+
+    desktop_dir = get_desktop_dir()
+    desktop_dir.mkdir(parents=True, exist_ok=True)
+    desktop_path = desktop_dir / "intro.png"
+    shutil.copy2(result, desktop_path)
+
+    await status.delete()
+    await update.message.reply_photo(
+      photo=BytesIO(result.read_bytes()),
+      caption=(
+        f"פתיחה — רמה: {difficulty}\n\n"
+        f"נשמר בשולחן העבודה:\n{desktop_path.name}"
+      ),
+    )
+    log.info("Created intro %s (difficulty=%s) for chat %s", result, difficulty, update.effective_chat.id)
+  except Exception as exc:
+    log.exception("Intro generation failed")
+    await status.edit_text(f"שגיאה:\n{exc}")
 
 
 async def generate_outro_and_reply(update: Update, text: str) -> None:
@@ -680,9 +769,10 @@ async def generate_and_reply(update: Update, text: str) -> None:
   status = await update.message.reply_text("מייצר סלייד...")
 
   try:
-    artist, song, chord_names = parse_song_request(text)
+    artist, song, chord_names, song_difficulty = parse_song_request(text)
     config = load_config(CONFIG_PATH)
     artist_image = resolve_artist_or_hint_swap(config, artist, song)
+    difficulty = song_difficulty or load_session_difficulty()
     desktop_dir = get_desktop_dir()
     desktop_dir.mkdir(parents=True, exist_ok=True)
     output = desktop_dir / safe_filename(song)
@@ -695,12 +785,14 @@ async def generate_and_reply(update: Update, text: str) -> None:
       background=None,
       output=output,
       config=config,
+      difficulty=difficulty,
     )
 
     await status.delete()
+    level_note = f"\nרמה: {difficulty}" if difficulty else ""
     await update.message.reply_photo(
       photo=BytesIO(result.read_bytes()),
-      caption=f"{artist} — {song}\n\nנשמר בשולחן העבודה:\n{result.name}",
+      caption=f"{artist} — {song}{level_note}\n\nנשמר בשולחן העבודה:\n{result.name}",
     )
     log.info("Created %s for chat %s", result, update.effective_chat.id)
   except Exception as exc:

@@ -1,5 +1,6 @@
 # Generated slides
 output/
+intros/session.json
 
 # User media — run create_test_assets.py after clone, then add your own images
 input/
