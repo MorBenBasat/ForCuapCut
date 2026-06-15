@@ -1,0 +1,21 @@
+# העתק לשם_שיר_video.yaml — הוסף timeline + קובץ שיר
+artist: "עידן עמדי"
+song: "שם השיר"
+difficulty: קל
+chords:
+  - Am
+  - G
+  - F
+  - C
+audio: "input/song.mp3"   # אופציונלי — בלי זה: סרטון בלי סאונד
+output: "output/song_video.mp4"
+# כמה שניות לכל אקורד (רק אם אין audio ואין end)
+segment_seconds: 4
+# אורך כולל בשניות (רק אם אין audio)
+# דוגמה לפזמון קצר (~30 שניות):
+# end: 30
+timeline:
+  - { chord: 1, at: 0 }   # Am מ-0 שניות
+  - { chord: 2, at: 4 }   # G מ-4 שניות
+  - { chord: 3, at: 8 }   # F מ-8 שניות
+  - { chord: 4, at: 12 }  # C מ-12 שניות

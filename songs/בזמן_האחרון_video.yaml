@@ -1,0 +1,18 @@
+artist: "עידן עמדי"
+song: "בזמן האחרון"
+difficulty: קל
+chords:
+  - AM
+  - G
+  - DM
+  - F
+  - C
+# audio: "input/bezman_haaharon.mp3"
+output: "output/בזמן_האחרון.mp4"
+segment_seconds: 4
+timeline:
+  - { chord: 1, at: 0 }
+  - { chord: 2, at: 4 }
+  - { chord: 3, at: 8 }
+  - { chord: 4, at: 12 }
+  - { chord: 5, at: 16 }

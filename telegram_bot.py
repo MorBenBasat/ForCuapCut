@@ -25,7 +25,9 @@ from generate import (
   resolve_artist_image,
   save_session_difficulty,
   load_session_difficulty,
+  song_slug,
 )
+from generate_video import generate_song_video_from_data
 from whatsapp_client import (
   WhatsAppError,
   is_auto_send_enabled,
@@ -54,6 +56,8 @@ HEBREW_TO_LATIN = {
 }
 PENDING_ARTIST_KEY = "pending_artist"
 ARTISTS_MANAGE_KEY = "artists_manage"
+LAST_SONG_KEY = "last_song"
+PENDING_VIDEO_KEY = "pending_video"
 
 HELP_TEXT = (
   "מה אפשר לעשות:\n\n"
@@ -73,6 +77,11 @@ HELP_TEXT = (
   "דודו אהרון | שם השיר | Em,C,G,D\n"
   "רמה: קשה\n"
   "(רמה אופציונלית — בשורה נפרדת; אם חסר, נלקח מהפתיחה האחרונה)\n\n"
+  "סרטון (אחרי שיצרת סלייד):\n"
+  "צור סרטון | 0,5,10,15 | 30\n"
+  "(זמנים + אורך סרטון בשניות — לא חובה 4 דקות!)\n"
+  "או: סוף: 30 בשורה נפרדת\n"
+  "ואז שלח קובץ שיר (MP3)\n\n"
   "ווצאפ (אחרי שנוצר סרטון):\n"
   "שלח את קובץ ה-MP4 לבוט — יישלח אוטומטית\n"
   "או: שלח לווצאפ (שולח את ה-MP4 האחרון מ-output/)"
@@ -147,10 +156,131 @@ def parse_song_request(text: str) -> tuple[str, str, list[str], str | None]:
     raise ValueError("חסר זמר, שם שיר או אקורדים.")
 
   chord_names = [c.strip() for c in chords_raw.split(",") if c.strip()]
-  if not (4 <= len(chord_names) <= 6):
-    raise ValueError(f"צריך 4–6 אקורדים, קיבלתי {len(chord_names)}.")
+  if not (4 <= len(chord_names) <= 8):
+    raise ValueError(f"צריך 4–8 אקורדים, קיבלתי {len(chord_names)}.")
 
   return artist, song, chord_names, difficulty
+
+
+def is_video_request(text: str) -> bool:
+  cleaned = text.strip()
+  return cleaned.startswith("צור סרטון") or cleaned.startswith("סרטון")
+
+
+def parse_video_request(text: str, chord_count: int) -> tuple[list[dict], float | None]:
+  """Parse timeline + optional end length. Returns (timeline, end_seconds)."""
+  end_seconds: float | None = None
+  kept_lines: list[str] = []
+  for line in text.splitlines():
+    end_match = re.match(r"^סוף\s*:\s*(\d+(?:\.\d+)?)\s*$", line.strip(), re.IGNORECASE)
+    if end_match:
+      end_seconds = float(end_match.group(1))
+      continue
+    kept_lines.append(line)
+  cleaned = "\n".join(kept_lines).strip()
+
+  matched = False
+  for prefix in ("צור סרטון", "סרטון"):
+    if cleaned.startswith(prefix):
+      cleaned = cleaned[len(prefix) :].strip()
+      matched = True
+      break
+  if not matched:
+    raise ValueError("פורמט סרטון לא תקין.")
+
+  if cleaned.startswith("|"):
+    cleaned = cleaned[1:].strip()
+  if not cleaned:
+    raise ValueError(
+      "חסרים זמנים.\n"
+      "דוגמה:\n"
+      f"צור סרטון | {','.join(str(i * 4) for i in range(chord_count))} | 30"
+    )
+
+  segments = [part.strip() for part in cleaned.split("|") if part.strip()]
+  times_text = segments[0]
+  if len(segments) >= 2 and re.fullmatch(r"\d+(?:\.\d+)?", segments[-1]):
+    end_seconds = float(segments[-1])
+    if len(segments) > 2:
+      times_text = "|".join(segments[:-1])
+    elif len(segments) == 2:
+      times_text = segments[0]
+
+  timeline = _parse_timeline_times(times_text, chord_count)
+  if end_seconds is not None and end_seconds <= timeline[-1]["at"]:
+    raise ValueError(
+      f"אורך הסרטון ({end_seconds}) חייב להיות אחרי האקורד האחרון "
+      f"({timeline[-1]['at']} שניות)."
+    )
+  return timeline, end_seconds
+
+
+def _parse_timeline_times(times_text: str, chord_count: int) -> list[dict]:
+  explicit = re.findall(
+    r"(\d+)\s*[:@-]\s*(\d+(?:\.\d+)?)",
+    times_text,
+  )
+  if explicit:
+    timeline: list[dict] = []
+    for chord_raw, at_raw in explicit:
+      chord = int(chord_raw)
+      at = float(at_raw)
+      if not 1 <= chord <= chord_count:
+        raise ValueError(f"מספר אקורד חייב 1-{chord_count}, קיבלתי {chord}")
+      timeline.append({"chord": chord, "at": at})
+    timeline.sort(key=lambda item: item["at"])
+    if timeline[0]["at"] != 0:
+      raise ValueError("הזמן הראשון חייב להיות 0.")
+    return timeline
+
+  parts = [part.strip() for part in re.split(r"[,;\s]+", times_text) if part.strip()]
+  try:
+    times = [float(part) for part in parts]
+  except ValueError as exc:
+    raise ValueError(
+      "זמנים לא תקינים.\n"
+      "דוגמה:\n"
+      "צור סרטון | 0,5,10,15 | 30"
+    ) from exc
+
+  if len(times) != chord_count:
+    raise ValueError(
+      f"צריך {chord_count} זמנים (אחד לכל אקורד), קיבלתי {len(times)}.\n"
+      f"דוגמה: צור סרטון | {','.join(str(i * 4) for i in range(chord_count))} | 30"
+    )
+  if times[0] != 0:
+    raise ValueError("הזמן הראשון חייב להיות 0.")
+  for i in range(1, len(times)):
+    if times[i] <= times[i - 1]:
+      raise ValueError("הזמנים חייבים לעלות — כל זמן גדול מהקודם.")
+
+  return [{"chord": index + 1, "at": at} for index, at in enumerate(times)]
+
+
+def parse_video_timeline(text: str, chord_count: int) -> list[dict]:
+  timeline, _end = parse_video_request(text, chord_count)
+  return timeline
+
+
+def build_video_job(
+  *,
+  artist: str,
+  song: str,
+  chord_names: list[str],
+  timeline: list[dict],
+  difficulty: str | None,
+  end_seconds: float | None = None,
+) -> dict:
+  job = {
+    "artist": artist,
+    "song": song,
+    "chords": chord_names,
+    "timeline": timeline,
+    "difficulty": difficulty or "קל",
+  }
+  if end_seconds is not None:
+    job["end"] = end_seconds
+  return job
 
 
 def parse_difficulty_line(line: str) -> str | None:
@@ -531,6 +661,54 @@ async def on_document(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     return
 
   name = (document.file_name or "").lower()
+  mime = (document.mime_type or "").lower()
+  caption = (update.message.caption or "").strip()
+
+  is_audio = (
+    mime.startswith("audio/")
+    or name.endswith((".mp3", ".m4a", ".wav", ".ogg", ".aac"))
+  )
+  if is_audio:
+    if caption and is_video_request(caption):
+      last_song = context.user_data.get(LAST_SONG_KEY)
+      if not last_song:
+        await update.message.reply_text(
+          "קודם צור סלייד שיר.\n\n"
+          "דוגמה:\n"
+          "אייל גולן | בעירי | AM,DM,F,E,G,C"
+        )
+        return
+      try:
+        timeline, end_seconds = parse_video_request(caption, len(last_song["chords"]))
+        context.user_data[PENDING_VIDEO_KEY] = build_video_job(
+          artist=last_song["artist"],
+          song=last_song["song"],
+          chord_names=last_song["chords"],
+          timeline=timeline,
+          difficulty=last_song.get("difficulty"),
+          end_seconds=end_seconds,
+        )
+      except ValueError as exc:
+        await update.message.reply_text(str(exc))
+        return
+
+    status = await update.message.reply_text("מוריד את השיר...")
+    try:
+      tg_file = await context.bot.get_file(document.file_id)
+      filename = document.file_name or "song.mp3"
+      audio_bytes = bytes(await tg_file.download_as_bytearray())
+      await status.delete()
+      await generate_video_and_reply(
+        update,
+        context,
+        audio_bytes,
+        filename=filename,
+      )
+    except Exception as exc:
+      log.exception("Failed to handle audio document")
+      await status.edit_text(f"שגיאה:\n{exc}")
+    return
+
   if not name.endswith(".mp4"):
     return
 
@@ -762,7 +940,11 @@ async def generate_outro_and_reply(update: Update, text: str) -> None:
   )
 
 
-async def generate_and_reply(update: Update, text: str) -> None:
+async def generate_and_reply(
+  update: Update,
+  context: ContextTypes.DEFAULT_TYPE,
+  text: str,
+) -> None:
   if await deny_if_unauthorized(update):
     return
 
@@ -788,15 +970,188 @@ async def generate_and_reply(update: Update, text: str) -> None:
       difficulty=difficulty,
     )
 
+    context.user_data[LAST_SONG_KEY] = {
+      "artist": artist,
+      "song": song,
+      "chords": chord_names,
+      "difficulty": difficulty,
+    }
+    context.user_data.pop(PENDING_VIDEO_KEY, None)
+
     await status.delete()
     level_note = f"\nרמה: {difficulty}" if difficulty else ""
     await update.message.reply_photo(
       photo=BytesIO(result.read_bytes()),
-      caption=f"{artist} — {song}{level_note}\n\nנשמר בשולחן העבודה:\n{result.name}",
+      caption=(
+        f"{artist} — {song}{level_note}\n\n"
+        f"נשמר בשולחן העבודה:\n{result.name}\n\n"
+        "לסרטון — שלח:\n"
+        f"צור סרטון | {','.join(str(i * 4) for i in range(len(chord_names)))}\n"
+        "ואז קובץ MP3"
+      ),
     )
     log.info("Created %s for chat %s", result, update.effective_chat.id)
   except Exception as exc:
     log.exception("Generation failed")
+    await status.edit_text(f"שגיאה:\n{exc}")
+
+
+async def start_video_request(
+  update: Update,
+  context: ContextTypes.DEFAULT_TYPE,
+  text: str,
+) -> None:
+  if await deny_if_unauthorized(update):
+    return
+
+  last_song = context.user_data.get(LAST_SONG_KEY)
+  if not last_song:
+    await update.message.reply_text(
+      "קודם צור סלייד שיר.\n\n"
+      "דוגמה:\n"
+      "אייל גולן | בעירי | AM,DM,F,E,G,C"
+    )
+    return
+
+  try:
+    timeline, end_seconds = parse_video_request(text, len(last_song["chords"]))
+    context.user_data[PENDING_VIDEO_KEY] = build_video_job(
+      artist=last_song["artist"],
+      song=last_song["song"],
+      chord_names=last_song["chords"],
+      timeline=timeline,
+      difficulty=last_song.get("difficulty"),
+      end_seconds=end_seconds,
+    )
+    end_note = f"\nאורך סרטון: {end_seconds} שניות" if end_seconds else ""
+    await update.message.reply_text(
+      f"מעולה — {last_song['song']}\n"
+      f"{len(timeline)} אקורדים מסונכרנים.{end_note}\n\n"
+      "שלח עכשיו קובץ שיר (MP3).\n"
+      "אפשר גם אודיו עם כיתוב שמכיל את הזמנים."
+    )
+  except ValueError as exc:
+    await update.message.reply_text(str(exc))
+
+
+async def generate_video_and_reply(
+  update: Update,
+  context: ContextTypes.DEFAULT_TYPE,
+  audio_bytes: bytes,
+  *,
+  filename: str,
+) -> None:
+  pending = context.user_data.get(PENDING_VIDEO_KEY)
+  if not pending:
+    await update.message.reply_text(
+      "קודם שלח זמנים לסרטון.\n\n"
+      "דוגמה:\n"
+      "צור סרטון | 0,5,10,15,20,25"
+    )
+    return
+
+  status = await update.message.reply_text("מייצר סרטון... (זה לוקח כדקה)")
+  try:
+    INPUT_DIR.mkdir(parents=True, exist_ok=True)
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+    slug = song_slug(pending["song"])
+    ext = Path(filename).suffix.lower() or ".mp3"
+    if ext not in {".mp3", ".m4a", ".wav", ".ogg", ".aac"}:
+      ext = ".mp3"
+    audio_path = INPUT_DIR / f"{slug}{ext}"
+    audio_path.write_bytes(audio_bytes)
+
+    output_name = safe_filename(pending["song"], ".mp4")
+    output_path = OUTPUT_DIR / output_name
+    desktop_path = get_desktop_dir() / output_name
+
+    config = load_config(CONFIG_PATH)
+    video_data = {
+      **pending,
+      "audio": str(audio_path.relative_to(ROOT)).replace("\\", "/"),
+      "output": str(output_path.relative_to(ROOT)).replace("\\", "/"),
+    }
+
+    result = await asyncio.to_thread(
+      generate_song_video_from_data,
+      video_data,
+      config=config,
+      config_path=CONFIG_PATH,
+    )
+
+    desktop_path.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(result, desktop_path)
+    context.user_data.pop(PENDING_VIDEO_KEY, None)
+
+    await status.delete()
+    await update.message.reply_video(
+      video=BytesIO(result.read_bytes()),
+      caption=(
+        f"{pending['artist']} — {pending['song']}\n\n"
+        f"נשמר:\n{desktop_path.name}"
+      ),
+      supports_streaming=True,
+    )
+    log.info("Created video %s for chat %s", result, update.effective_chat.id)
+
+    if is_auto_send_enabled():
+      await deliver_video_to_whatsapp(
+        update,
+        result,
+        caption=f"{pending['artist']} — {pending['song']}",
+      )
+    elif is_whatsapp_enabled():
+      await update.message.reply_text(
+        "לשליחה לווצאפ — הוסף WHATSAPP_AUTO_SEND=true ל-.env\n"
+        "או שלח: שלח לווצאפ"
+      )
+  except Exception as exc:
+    log.exception("Video generation failed")
+    await status.edit_text(f"שגיאה ביצירת סרטון:\n{exc}")
+
+
+async def on_audio(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+  if await deny_if_unauthorized(update):
+    return
+
+  caption = (update.message.caption or "").strip()
+  if caption and is_video_request(caption):
+    last_song = context.user_data.get(LAST_SONG_KEY)
+    if not last_song:
+      await update.message.reply_text(
+        "קודם צור סלייד שיר.\n\n"
+        "דוגמה:\n"
+        "אייל גולן | בעירי | AM,DM,F,E,G,C"
+      )
+      return
+    try:
+      timeline, end_seconds = parse_video_request(caption, len(last_song["chords"]))
+      context.user_data[PENDING_VIDEO_KEY] = build_video_job(
+        artist=last_song["artist"],
+        song=last_song["song"],
+        chord_names=last_song["chords"],
+        timeline=timeline,
+        difficulty=last_song.get("difficulty"),
+        end_seconds=end_seconds,
+      )
+    except ValueError as exc:
+      await update.message.reply_text(str(exc))
+      return
+
+  audio = update.message.audio
+  if audio is None:
+    return
+
+  status = await update.message.reply_text("מוריד את השיר...")
+  try:
+    tg_file = await context.bot.get_file(audio.file_id)
+    filename = audio.file_name or f"{audio.file_unique_id}.mp3"
+    audio_bytes = bytes(await tg_file.download_as_bytearray())
+    await status.delete()
+    await generate_video_and_reply(update, context, audio_bytes, filename=filename)
+  except Exception as exc:
+    log.exception("Failed to handle audio upload")
     await status.edit_text(f"שגיאה:\n{exc}")
 
 
@@ -823,6 +1178,10 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await deliver_video_to_whatsapp(update, latest)
     return
 
+  if is_video_request(text):
+    await start_video_request(update, context, text)
+    return
+
   if is_list_artists_request(text):
     await show_artists(update, context)
     return
@@ -842,7 +1201,7 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     elif header in ("צור סיום", "סיום") or header.startswith("צור סיום"):
       await generate_outro_and_reply(update, text)
     else:
-      await generate_and_reply(update, text)
+      await generate_and_reply(update, context, text)
     return
 
   delete_name = parse_delete_name(text)
@@ -863,8 +1222,19 @@ def main() -> None:
 
   app.add_handler(CommandHandler("start", cmd_start))
   app.add_handler(MessageHandler(filters.PHOTO, on_photo))
+  app.add_handler(MessageHandler(filters.AUDIO, on_audio))
   app.add_handler(MessageHandler(filters.VIDEO, on_video))
-  app.add_handler(MessageHandler(filters.Document.VIDEO | filters.Document.MimeType("video/mp4"), on_document))
+  app.add_handler(
+    MessageHandler(
+      filters.Document.VIDEO
+      | filters.Document.MimeType("video/mp4")
+      | filters.Document.MimeType("audio/mpeg")
+      | filters.Document.MimeType("audio/mp4")
+      | filters.Document.MimeType("audio/wav")
+      | filters.Document.MimeType("audio/ogg"),
+      on_document,
+    )
+  )
   app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
 
   log.info("Bot starting...")

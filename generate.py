@@ -14,6 +14,8 @@ from bidi.algorithm import get_display
 ROOT = Path(__file__).resolve().parent
 SESSION_PATH = ROOT / "intros" / "session.json"
 DIFFICULTY_LEVELS = ("קל", "בינוני", "קשה")
+MIN_CHORDS = 4
+MAX_CHORDS = 8
 
 
 def load_config(path: Path) -> dict:
@@ -51,12 +53,13 @@ def song_slug(title: str) -> str:
 
 def resolve_chord_image(chords_dir: Path, name: str) -> Path:
   """Find chord PNG by name (case-insensitive)."""
-  variants = [
-    name,
-    name.upper(),
-    name.lower(),
-    name.capitalize(),
-  ]
+  from generate_chord import chord_asset_key
+
+  asset_key = chord_asset_key(name)
+  variants: list[str] = []
+  for candidate in (asset_key, name, name.upper(), name.lower(), name.capitalize()):
+    if candidate and candidate not in variants:
+      variants.append(candidate)
   for variant in variants:
     for ext in (".png", ".jpg", ".jpeg", ".webp"):
       candidate = chords_dir / f"{variant}{ext}"
@@ -72,6 +75,43 @@ def size_from_scale(img: Image.Image, scale_pct: float, ref_height: int) -> tupl
   return max(1, int(img.width * ratio)), target_h
 
 
+def crop_center_square(img: Image.Image) -> Image.Image:
+  w, h = img.size
+  side = min(w, h)
+  left = (w - side) // 2
+  top = (h - side) // 2
+  return img.crop((left, top, left + side, top + side))
+
+
+def apply_circular_mask(
+  img: Image.Image,
+  *,
+  border_width: int = 0,
+  border_color: str = "#FFFFFF",
+) -> Image.Image:
+  """Square RGBA image → circle with optional ring border."""
+  size = img.size[0]
+  if img.size[1] != size:
+    raise ValueError("apply_circular_mask expects a square image")
+
+  mask = Image.new("L", (size, size), 0)
+  draw = ImageDraw.Draw(mask)
+  draw.ellipse((0, 0, size - 1, size - 1), fill=255)
+
+  result = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+  result.paste(img, (0, 0), mask)
+
+  if border_width > 0:
+    draw = ImageDraw.Draw(result)
+    inset = border_width // 2
+    draw.ellipse(
+      (inset, inset, size - 1 - inset, size - 1 - inset),
+      outline=border_color,
+      width=border_width,
+    )
+  return result
+
+
 def capcut_y_to_center_y(y: float, canvas_h: int) -> int:
   """CapCut Y+ up → pixel center Y."""
   return int(canvas_h / 2 - y)
@@ -83,12 +123,12 @@ def layout_chord_positions(
   canvas_w: int,
   canvas_h: int,
   gap: int,
-  top_y: float,
-  bottom_y: float,
+  row_ys: list[float],
   center_offset_x: int = 0,
 ) -> list[tuple[int, int]]:
-  """Place chords in centered rows with fixed gaps (no overlap)."""
-  row_ys = [top_y, bottom_y]
+  """Place chords in centered rows with fixed CapCut Y anchors."""
+  if len(row_ys) != len(pattern):
+    raise ValueError("row_ys length must match pattern rows")
   positions: list[tuple[int, int]] = []
   idx = 0
   for row_i, count in enumerate(pattern):
@@ -103,6 +143,41 @@ def layout_chord_positions(
     for width, height in zip(widths, heights, strict=True):
       positions.append((x, center_y - height // 2))
       x += width + gap
+  return positions
+
+
+def layout_chord_positions_stacked(
+  chord_sizes: list[tuple[int, int]],
+  pattern: list[int],
+  canvas_w: int,
+  canvas_h: int,
+  horizontal_gap: int,
+  *,
+  first_row_capcut_y: float,
+  vertical_gap: int,
+  label_top_pad: int = 0,
+  last_row_extra_gap: int = 0,
+  center_offset_x: int = 0,
+) -> list[tuple[int, int]]:
+  """Stack 3+ rows with spacing derived from chord height (no overlap)."""
+  chord_h = max(h for _, h in chord_sizes)
+  row_step = chord_h + vertical_gap + label_top_pad
+  first_center_y = capcut_y_to_center_y(first_row_capcut_y, canvas_h)
+  positions: list[tuple[int, int]] = []
+  idx = 0
+  for row_i, count in enumerate(pattern):
+    row = chord_sizes[idx : idx + count]
+    idx += count
+    widths = [size[0] for size in row]
+    heights = [size[1] for size in row]
+    row_width = sum(widths) + horizontal_gap * (count - 1)
+    start_x = (canvas_w - row_width) // 2 + center_offset_x
+    extra = last_row_extra_gap if row_i == len(pattern) - 1 and row_i > 0 else 0
+    center_y = first_center_y + row_i * row_step + extra
+    x = start_x
+    for width, height in zip(widths, heights, strict=True):
+      positions.append((x, center_y - height // 2))
+      x += width + horizontal_gap
   return positions
 
 
@@ -178,6 +253,16 @@ def get_difficulty_theme(config: dict, difficulty: str | None) -> dict | None:
   if not theme:
     raise ValueError(f"Unknown difficulty '{level}'. Use: {', '.join(DIFFICULTY_LEVELS)}")
   return {"level": level, **theme}
+
+
+def get_thumbnail_default_strip_theme(config: dict) -> dict:
+  """Accent colors for thumbnail slides without a difficulty badge."""
+  defaults = config.get("thumbnail", {}).get("default_strip", {})
+  return {
+    "accent": defaults.get("accent", "#FFD54F"),
+    "badge_bg": defaults.get("badge_bg", "#FFD54F"),
+    "shadow": defaults.get("shadow", "#1A0A00"),
+  }
 
 
 def save_session_difficulty(difficulty: str) -> None:
@@ -363,6 +448,7 @@ def build_centered_intro_layout(
   theme: dict | None,
   config: dict,
   slide_cfg: dict,
+  accent_strip_theme: dict | None = None,
 ) -> dict:
   layout_cfg = slide_cfg.get("layout", {})
   font_sizes = layout_cfg.get("line_font_sizes", [135, 98, 88, 88])
@@ -383,6 +469,8 @@ def build_centered_intro_layout(
   header_h = 0
   if theme:
     header_h = badge_h + strip_gap + strip_h + text_gap
+  elif accent_strip_theme:
+    header_h = strip_h + text_gap
 
   line_entries: list[dict] = []
   text_block_h = 0
@@ -413,9 +501,14 @@ def build_centered_intro_layout(
   badge_top = y
   badge_bounds = None
   strip_bounds = None
+  strip_top = None
   if theme:
     badge_bounds = (0, badge_top, 0, badge_top + badge_h)  # x filled at draw
     y = badge_top + badge_h + strip_gap
+    strip_top = y
+    strip_bounds = (0, strip_top, 0, strip_top + strip_h)
+    y = strip_top + strip_h + text_gap
+  elif accent_strip_theme:
     strip_top = y
     strip_bounds = (0, strip_top, 0, strip_top + strip_h)
     y = strip_top + strip_h + text_gap
@@ -442,7 +535,7 @@ def build_centered_intro_layout(
     content_left = min(content_left, canvas_w // 2 - text_w // 2)
     content_right = max(content_right, canvas_w // 2 + text_w // 2)
 
-  if theme:
+  if theme or accent_strip_theme:
     strip_w = max(1, int(canvas_w * float(strip_cfg.get("width_ratio", 0.88))))
     content_left = min(content_left, (canvas_w - strip_w) // 2)
     content_right = max(content_right, (canvas_w + strip_w) // 2)
@@ -454,10 +547,11 @@ def build_centered_intro_layout(
 
   return {
     "badge_top": badge_top,
-    "strip_top": strip_top if theme else None,
+    "strip_top": strip_top,
     "lines": line_entries,
     "panel_rect": (panel_x0, panel_y0, panel_x1, panel_y1),
     "strip_cfg": strip_cfg,
+    "accent_strip_theme": accent_strip_theme,
   }
 
 
@@ -483,6 +577,64 @@ def draw_difficulty_badge(
   )
 
 
+def resolve_chord_scale(grid_cfg: dict, chord_count: int) -> float:
+  """Full size for ≤6 chords; slightly smaller above 6."""
+  base_scale = float(grid_cfg["scale"])
+  if chord_count <= 6:
+    return base_scale
+  return float(grid_cfg.get("scale_compact", base_scale * 0.9))
+
+
+def resolve_singer_scale(singer_cfg: dict, chord_count: int) -> float:
+  """Full size for ≤6 chords; smaller photo when the grid needs more room."""
+  base_scale = float(singer_cfg["scale"])
+  if chord_count <= 6:
+    return base_scale
+  return float(singer_cfg.get("scale_compact", base_scale * 0.85))
+
+
+def row_ys_from_config(row_cfg: dict) -> list[float]:
+  if "row_ys" in row_cfg:
+    return [float(y) for y in row_cfg["row_ys"]]
+  return [float(row_cfg["top_y"]), float(row_cfg["bottom_y"])]
+
+
+def layout_chords_for_pattern(
+  chord_sizes: list[tuple[int, int]],
+  pattern: list[int],
+  canvas_w: int,
+  canvas_h: int,
+  grid_cfg: dict,
+  row_cfg: dict,
+  *,
+  label_top_pad: int = 0,
+) -> list[tuple[int, int]]:
+  horizontal_gap = int(grid_cfg["horizontal_gap"])
+  center_offset_x = int(grid_cfg.get("center_offset_x", 0))
+  if len(pattern) > 2:
+    return layout_chord_positions_stacked(
+      chord_sizes,
+      pattern,
+      canvas_w,
+      canvas_h,
+      horizontal_gap,
+      first_row_capcut_y=float(row_cfg.get("first_row_y", row_cfg.get("top_y", 215))),
+      vertical_gap=int(row_cfg.get("vertical_gap", grid_cfg.get("vertical_gap", 28))),
+      label_top_pad=label_top_pad,
+      last_row_extra_gap=int(row_cfg.get("last_row_extra_gap", 0)),
+      center_offset_x=center_offset_x,
+    )
+  return layout_chord_positions(
+    chord_sizes,
+    pattern,
+    canvas_w,
+    canvas_h,
+    horizontal_gap,
+    row_ys_from_config(row_cfg),
+    center_offset_x,
+  )
+
+
 def pick_row_config(config: dict, chord_count: int) -> dict:
   rows = config["chord_grid"]["rows"]
   key = str(chord_count)
@@ -503,16 +655,20 @@ def generate_song_slide(
   output: Path,
   config: dict,
   difficulty: str | None = None,
+  highlight_index: int | None = None,
 ) -> Path:
   canvas_w = config["canvas"]["width"]
   canvas_h = config["canvas"]["height"]
   ref_h = config.get("scale_reference_height", canvas_h)
 
-  if not (4 <= len(chord_names) <= 6):
-    raise ValueError(f"Expected 4-6 chords, got {len(chord_names)}")
+  chord_count = len(chord_names)
+  if not (MIN_CHORDS <= chord_count <= MAX_CHORDS):
+    raise ValueError(
+      f"Expected {MIN_CHORDS}-{MAX_CHORDS} chords, got {chord_count}"
+    )
 
   grid_cfg = config["chord_grid"]
-  row_cfg = pick_row_config(config, len(chord_names))
+  row_cfg = pick_row_config(config, chord_count)
   pattern = row_cfg["pattern"]
   if sum(pattern) != len(chord_names):
     raise ValueError("Row pattern does not match chord count")
@@ -533,9 +689,21 @@ def generate_song_slide(
 
   # Singer placement
   singer_cfg = config["singer"]
+  singer_scale = resolve_singer_scale(singer_cfg, chord_count)
   singer_img = Image.open(artist_image).convert("RGBA")
-  singer_w, singer_h = size_from_scale(singer_img, singer_cfg["scale"], ref_h)
-  singer_img = singer_img.resize((singer_w, singer_h), Image.Resampling.LANCZOS)
+  if singer_cfg.get("circular", True):
+    singer_img = crop_center_square(singer_img)
+    singer_size = max(1, int(ref_h * singer_scale / 100))
+    singer_img = singer_img.resize((singer_size, singer_size), Image.Resampling.LANCZOS)
+    singer_img = apply_circular_mask(
+      singer_img,
+      border_width=int(singer_cfg.get("border_width", 5)),
+      border_color=singer_cfg.get("border_color", "#FFF8DC"),
+    )
+    singer_w = singer_h = singer_size
+  else:
+    singer_w, singer_h = size_from_scale(singer_img, singer_scale, ref_h)
+    singer_img = singer_img.resize((singer_w, singer_h), Image.Resampling.LANCZOS)
   anchor = singer_cfg.get("anchor", "top_left")
   offset_x = int(singer_cfg.get("capcut_x", 0))
   offset_y = int(singer_cfg.get("y", singer_cfg.get("capcut_y", 0)))
@@ -548,7 +716,7 @@ def generate_song_slide(
   canvas.paste(singer_img, (singer_x, singer_y), singer_img)
 
   # Chords — auto-centered rows with even gaps
-  chord_scale = grid_cfg["scale"]
+  chord_scale = resolve_chord_scale(grid_cfg, chord_count)
   diff_cfg = config.get("difficulty", {})
   tint_enabled = diff_cfg.get("chord_tint_enabled", False)
   tint_opacity = float(diff_cfg.get("chord_tint_opacity", 0.28))
@@ -565,15 +733,31 @@ def generate_song_slide(
     chord_images.append(chord_img)
     chord_sizes.append((cw, ch))
 
-  positions = layout_chord_positions(
+  labels_cfg = grid_cfg.get("labels", {})
+  label_top_pad = 0
+  label_font = None
+  label_h = 0
+  gap_above = 0
+  label_stroke_width = 0
+  if labels_cfg.get("enabled", False):
+    label_font = load_font(config, int(labels_cfg.get("font_size", 42)))
+    label_stroke_width = int(labels_cfg.get("stroke_width", 0))
+    gap_above = int(labels_cfg.get("gap_above", 8))
+    probe = ImageDraw.Draw(Image.new("RGBA", (1, 1)))
+    sample_bbox = probe.textbbox(
+      (0, 0), "8", font=label_font, stroke_width=label_stroke_width
+    )
+    label_h = sample_bbox[3] - sample_bbox[1]
+    label_top_pad = label_h + gap_above
+
+  positions = layout_chords_for_pattern(
     chord_sizes,
     pattern,
     canvas_w,
     canvas_h,
-    int(grid_cfg["horizontal_gap"]),
-    float(row_cfg["top_y"]),
-    float(row_cfg["bottom_y"]),
-    int(grid_cfg.get("center_offset_x", 0)),
+    grid_cfg,
+    row_cfg,
+    label_top_pad=label_top_pad,
   )
   for chord_img, (tx, ty) in zip(chord_images, positions, strict=True):
     canvas.paste(chord_img, (tx, ty), chord_img)
@@ -584,10 +768,21 @@ def generate_song_slide(
   if border_cfg.get("enabled", True) and chord_theme:
     border_color = chord_theme.get("chord_label") or chord_theme.get("chord_tint")
     if border_color:
+      if highlight_index is None:
+        border_positions = positions
+        border_sizes = chord_sizes
+      else:
+        if not 1 <= highlight_index <= len(chord_names):
+          raise ValueError(
+            f"highlight_index must be 1-{len(chord_names)}, got {highlight_index}"
+          )
+        idx = highlight_index - 1
+        border_positions = [positions[idx]]
+        border_sizes = [chord_sizes[idx]]
       draw_chord_borders(
         draw,
-        positions,
-        chord_sizes,
+        border_positions,
+        border_sizes,
         color=border_color,
         padding=int(border_cfg.get("padding", 5)),
         border_width=int(border_cfg.get("width", 4)),
@@ -595,14 +790,7 @@ def generate_song_slide(
         stroke_color=border_cfg.get("stroke_color", "#000000"),
       )
 
-  labels_cfg = grid_cfg.get("labels", {})
-  if labels_cfg.get("enabled", False):
-    label_font_size = int(labels_cfg.get("font_size", 42))
-    label_font = load_font(config, label_font_size)
-    stroke_width = int(labels_cfg.get("stroke_width", 0))
-    gap_above = int(labels_cfg.get("gap_above", 8))
-    sample_bbox = draw.textbbox((0, 0), "8", font=label_font, stroke_width=stroke_width)
-    label_h = sample_bbox[3] - sample_bbox[1]
+  if labels_cfg.get("enabled", False) and label_font is not None:
     theme = chord_theme
     label_color = (
       theme["chord_label"]
@@ -622,42 +810,43 @@ def generate_song_slide(
         labels_cfg.get("shadow_color", "#000000"),
         int(labels_cfg.get("shadow_offset", 0)),
         labels_cfg.get("stroke_color"),
-        stroke_width,
+        label_stroke_width,
       )
 
-  # Text layers: X centered, Y from top (CapCut text values)
-  text_cfg = config["text"]
+  # Text layers: song title + artist (hidden when >6 chords — grid uses the space)
+  if chord_count <= 6:
+    text_cfg = config["text"]
 
-  artist_cfg = text_cfg["artist"]
-  artist_font = load_font(config, artist_cfg["font_size"])
-  draw_text_centered(
-    draw,
-    artist,
-    int(canvas_w / 2 + artist_cfg["capcut_x"]),
-    int(artist_cfg["capcut_y"]),
-    artist_font,
-    artist_cfg["color"],
-    artist_cfg["shadow_color"],
-    artist_cfg["shadow_offset"],
-    artist_cfg.get("stroke_color"),
-    int(artist_cfg.get("stroke_width", 0)),
-  )
+    song_cfg = text_cfg["song"]
+    song_font = load_font(config, song_cfg["font_size"])
+    song_color = chord_theme["chord_label"] if chord_theme else song_cfg["color"]
+    draw_text_centered(
+      draw,
+      song,
+      int(canvas_w / 2 + song_cfg["capcut_x"]),
+      int(song_cfg["capcut_y"]),
+      song_font,
+      song_color,
+      song_cfg["shadow_color"],
+      song_cfg["shadow_offset"],
+      song_cfg.get("stroke_color"),
+      int(song_cfg.get("stroke_width", 0)),
+    )
 
-  song_cfg = text_cfg["song"]
-  song_font = load_font(config, song_cfg["font_size"])
-  song_color = chord_theme["chord_label"] if chord_theme else song_cfg["color"]
-  draw_text_centered(
-    draw,
-    song,
-    int(canvas_w / 2 + song_cfg["capcut_x"]),
-    int(song_cfg["capcut_y"]),
-    song_font,
-    song_color,
-    song_cfg["shadow_color"],
-    song_cfg["shadow_offset"],
-    song_cfg.get("stroke_color"),
-    int(song_cfg.get("stroke_width", 0)),
-  )
+    artist_cfg = text_cfg["artist"]
+    artist_font = load_font(config, artist_cfg["font_size"])
+    draw_text_centered(
+      draw,
+      artist,
+      int(canvas_w / 2 + artist_cfg["capcut_x"]),
+      int(artist_cfg["capcut_y"]),
+      artist_font,
+      artist_cfg["color"],
+      artist_cfg["shadow_color"],
+      artist_cfg["shadow_offset"],
+      artist_cfg.get("stroke_color"),
+      int(artist_cfg.get("stroke_width", 0)),
+    )
 
   output.parent.mkdir(parents=True, exist_ok=True)
   canvas.save(output, "PNG", optimize=True)
@@ -783,6 +972,559 @@ def apply_intro_overlay(canvas: Image.Image, overlay_cfg: dict) -> Image.Image:
   return Image.alpha_composite(canvas.convert("RGBA"), overlay).convert("RGB")
 
 
+STRUM_TOKENS = frozenset({"D", "U", "X"})
+STRUM_TOKEN_ALIASES = {
+  "D": "D",
+  "DOWN": "D",
+  "↓": "D",
+  "למטה": "D",
+  "U": "U",
+  "UP": "U",
+  "↑": "U",
+  "למעלה": "U",
+  "X": "X",
+  "MUTE": "X",
+  "×": "X",
+  "*": "X",
+  "השתקה": "X",
+}
+
+
+def normalize_strum_token(value: str) -> str | None:
+  cleaned = str(value).strip()
+  if not cleaned:
+    return None
+  upper = cleaned.upper()
+  if upper in STRUM_TOKENS:
+    return upper
+  return STRUM_TOKEN_ALIASES.get(cleaned) or STRUM_TOKEN_ALIASES.get(upper)
+
+
+def parse_strum_pattern(raw) -> list[str]:
+  if isinstance(raw, list):
+    parts = raw
+  else:
+    parts = [part.strip() for part in str(raw).split(",") if part.strip()]
+  tokens: list[str] = []
+  for part in parts:
+    token = normalize_strum_token(part)
+    if not token:
+      raise ValueError(f"פעימה לא תקינה: {part!r}. השתמש ב-D / U / X.")
+    tokens.append(token)
+  if not 2 <= len(tokens) <= 16:
+    raise ValueError(f"צריך 2–16 פעימות, קיבלתי {len(tokens)}.")
+  return tokens
+
+
+def _strum_layout_grid(count: int, max_cols: int) -> tuple[int, int]:
+  cols = min(count, max_cols)
+  rows = (count + cols - 1) // cols
+  return cols, rows
+
+
+def _lerp_rgb(
+  top: tuple[int, int, int],
+  bottom: tuple[int, int, int],
+  t: float,
+) -> tuple[int, int, int]:
+  return tuple(int(top[i] + (bottom[i] - top[i]) * t) for i in range(3))
+
+
+def _token_gradient_colors(style: dict) -> tuple[tuple[int, int, int], tuple[int, int, int]]:
+  top = _parse_hex_color(style.get("bg_top", style.get("bg", "#333333")))
+  bottom = _parse_hex_color(style.get("bg_bottom", style.get("bg", "#111111")))
+  return top, bottom
+
+
+def _rounded_rect_mask(size: int, radius: int) -> Image.Image:
+  mask = Image.new("L", (size, size), 0)
+  mask_draw = ImageDraw.Draw(mask)
+  mask_draw.rounded_rectangle((0, 0, size - 1, size - 1), radius=radius, fill=255)
+  return mask
+
+
+def _render_strum_cell_image(
+  *,
+  size: int,
+  token: str,
+  style: dict,
+  config: dict,
+) -> Image.Image:
+  radius = int(style.get("radius", 26))
+  shadow_offset = int(style.get("shadow_blur", 8))
+  pad = shadow_offset + 4
+  canvas_size = size + pad * 2
+  sheet = Image.new("RGBA", (canvas_size, canvas_size), (0, 0, 0, 0))
+  draw = ImageDraw.Draw(sheet)
+
+  x0 = pad
+  y0 = pad
+  x1 = pad + size - 1
+  y1 = pad + size - 1
+
+  shadow_rgb = _parse_hex_color(style.get("shadow_color", "#000000"))
+  shadow_alpha = int(style.get("shadow_alpha", 110))
+  draw.rounded_rectangle(
+    (x0 + shadow_offset, y0 + shadow_offset, x1 + shadow_offset, y1 + shadow_offset),
+    radius=radius,
+    fill=(*shadow_rgb, shadow_alpha),
+  )
+
+  top_rgb, bottom_rgb = _token_gradient_colors(style)
+  cell = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+  cell_draw = ImageDraw.Draw(cell)
+  for y in range(size):
+    t = y / max(size - 1, 1)
+    color = _lerp_rgb(top_rgb, bottom_rgb, t)
+    cell_draw.line([(0, y), (size - 1, y)], fill=(*color, 255))
+
+  mask = _rounded_rect_mask(size, radius)
+  cell.putalpha(mask)
+  sheet.paste(cell, (x0, y0), cell)
+
+  outline = style.get("outline", "#000000")
+  outline_w = int(style.get("outline_width", 3))
+  glow = style.get("glow", outline)
+  glow_w = int(style.get("glow_width", 5))
+  if glow_w > 0:
+    draw.rounded_rectangle((x0, y0, x1, y1), radius=radius, outline=glow, width=glow_w)
+  if outline_w > 0:
+    draw.rounded_rectangle((x0, y0, x1, y1), radius=radius, outline=outline, width=outline_w)
+
+  shine_h = max(6, size // 5)
+  shine = Image.new("RGBA", (size, shine_h), (0, 0, 0, 0))
+  shine_draw = ImageDraw.Draw(shine)
+  shine_draw.rounded_rectangle(
+    (4, 0, size - 5, shine_h),
+    radius=shine_h // 2,
+    fill=(255, 255, 255, int(style.get("shine_opacity", 52))),
+  )
+  sheet.paste(shine, (x0 + 3, y0 + 4), shine)
+
+  symbol = style.get("symbol", token)
+  symbol_size = int(size * float(style.get("symbol_scale", 0.5)))
+  symbol_font = load_font(config, symbol_size)
+  stroke_width = int(style.get("stroke_width", 3))
+  symbol_layer = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+  symbol_draw = ImageDraw.Draw(symbol_layer)
+  probe = symbol_draw.textbbox((0, 0), symbol, font=symbol_font, stroke_width=stroke_width)
+  text_w = probe[2] - probe[0]
+  text_h = probe[3] - probe[1]
+  sym_x = (size - text_w) // 2 - probe[0]
+  sym_y = (size - text_h) // 2 - probe[1]
+  shadow_off = int(style.get("symbol_shadow_offset", 3))
+  if shadow_off:
+    symbol_draw.text(
+      (sym_x + shadow_off, sym_y + shadow_off),
+      symbol,
+      font=symbol_font,
+      fill=style.get("shadow", "#000000"),
+      stroke_width=stroke_width,
+      stroke_fill=style.get("stroke_color", "#000000"),
+    )
+  symbol_draw.text(
+    (sym_x, sym_y),
+    symbol,
+    font=symbol_font,
+    fill=style.get("color", "#FFFFFF"),
+    stroke_width=stroke_width,
+    stroke_fill=style.get("stroke_color", "#000000"),
+  )
+  sheet.paste(symbol_layer, (x0, y0), symbol_layer)
+  return sheet
+
+
+def _draw_strum_beat_number(
+  draw: ImageDraw.ImageDraw,
+  *,
+  center_x: int,
+  y: int,
+  beat_number: int,
+  number_cfg: dict,
+  config: dict,
+) -> None:
+  label = str(beat_number)
+  font_size = int(number_cfg.get("font_size", 30))
+  font = load_font(config, font_size)
+  pad_x = int(number_cfg.get("pill_padding_x", 14))
+  pad_y = int(number_cfg.get("pill_padding_y", 4))
+  bbox = draw.textbbox((0, 0), label, font=font)
+  text_w = bbox[2] - bbox[0]
+  text_h = bbox[3] - bbox[1]
+  pill_w = text_w + pad_x * 2
+  pill_h = text_h + pad_y * 2
+  x0 = center_x - pill_w // 2
+  y0 = y
+  x1 = x0 + pill_w
+  y1 = y0 + pill_h
+  fill = number_cfg.get("pill_bg", "#141414")
+  outline = number_cfg.get("pill_outline", "#FFD54F")
+  draw.rounded_rectangle(
+    (x0, y0, x1, y1),
+    radius=int(number_cfg.get("pill_radius", 16)),
+    fill=fill,
+    outline=outline,
+    width=int(number_cfg.get("pill_outline_width", 2)),
+  )
+  draw_text_centered(
+    draw,
+    label,
+    center_x,
+    y0 + pad_y - bbox[1],
+    font,
+    number_cfg.get("color", "#FFF8DC"),
+    number_cfg.get("shadow_color", number_cfg.get("shadow", "#000000")),
+    int(number_cfg.get("shadow_offset", 1)),
+    number_cfg.get("stroke_color", "#000000"),
+    int(number_cfg.get("stroke_width", 2)),
+  )
+
+
+def _draw_strum_connector(
+  draw: ImageDraw.ImageDraw,
+  *,
+  x0: int,
+  y0: int,
+  x1: int,
+  y1: int,
+  connector_cfg: dict,
+) -> None:
+  color = connector_cfg.get("color", "#FFD54F")
+  width = int(connector_cfg.get("width", 4))
+  dot_r = int(connector_cfg.get("dot_radius", 5))
+  mid_x = (x0 + x1) // 2
+  mid_y = (y0 + y1) // 2
+  draw.line([(x0, y0), (x1, y1)], fill=color, width=width)
+  draw.ellipse(
+    (mid_x - dot_r, mid_y - dot_r, mid_x + dot_r, mid_y + dot_r),
+    fill=color,
+    outline=connector_cfg.get("outline", "#1A0A00"),
+    width=1,
+  )
+
+
+def _draw_strum_cell(
+  canvas: Image.Image,
+  *,
+  center_x: int,
+  center_y: int,
+  size: int,
+  token: str,
+  beat_number: int,
+  token_cfg: dict,
+  number_cfg: dict,
+  config: dict,
+) -> None:
+  style = token_cfg.get(token, {})
+  if not style:
+    raise ValueError(f"Missing strum token style for {token}")
+
+  cell_img = _render_strum_cell_image(size=size, token=token, style=style, config=config)
+  paste_x = center_x - cell_img.width // 2
+  paste_y = center_y - cell_img.height // 2 - int(number_cfg.get("lift", 8))
+  canvas.alpha_composite(cell_img, (paste_x, paste_y))
+
+  if number_cfg.get("enabled", True):
+    num_y = center_y + size // 2 + int(number_cfg.get("gap_below", 14))
+    draw = ImageDraw.Draw(canvas)
+    _draw_strum_beat_number(
+      draw,
+      center_x=center_x,
+      y=num_y,
+      beat_number=beat_number,
+      number_cfg=number_cfg,
+      config=config,
+    )
+
+
+def _draw_strum_legend_chip(
+  canvas: Image.Image,
+  *,
+  center_x: int,
+  center_y: int,
+  token: str,
+  label: str,
+  token_cfg: dict,
+  legend_cfg: dict,
+  config: dict,
+) -> int:
+  style = token_cfg.get(token, {})
+  chip_h = int(legend_cfg.get("chip_height", 58))
+  icon_size = int(legend_cfg.get("icon_size", 38))
+  gap = int(legend_cfg.get("chip_gap", 12))
+  pad_x = int(legend_cfg.get("chip_padding_x", 18))
+  font_size = int(legend_cfg.get("font_size", 40))
+  font = load_font(config, font_size)
+
+  draw_probe = ImageDraw.Draw(Image.new("RGBA", (1, 1)))
+  text_bbox = draw_probe.textbbox((0, 0), get_display(label), font=font)
+  text_w = text_bbox[2] - text_bbox[0]
+  chip_w = pad_x * 2 + icon_size + gap + text_w
+
+  x0 = center_x - chip_w // 2
+  y0 = center_y - chip_h // 2
+  x1 = x0 + chip_w
+  y1 = y0 + chip_h
+
+  layer = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
+  layer_draw = ImageDraw.Draw(layer)
+  layer_draw.rounded_rectangle(
+    (x0, y0, x1, y1),
+    radius=int(legend_cfg.get("chip_radius", 28)),
+    fill=(*_parse_hex_color(legend_cfg.get("chip_bg", "#141414")), 220),
+    outline=legend_cfg.get("chip_outline", "#FFD54F"),
+    width=int(legend_cfg.get("chip_outline_width", 2)),
+  )
+  canvas.alpha_composite(layer)
+
+  icon = _render_strum_cell_image(size=icon_size, token=token, style=style, config=config)
+  icon_x = x0 + pad_x + icon_size // 2 - icon.width // 2
+  icon_y = center_y - icon.height // 2
+  canvas.alpha_composite(icon, (icon_x, icon_y))
+
+  draw = ImageDraw.Draw(canvas)
+  text_x = x0 + pad_x + icon_size + gap
+  text_y = center_y - (text_bbox[3] - text_bbox[1]) // 2 - text_bbox[1]
+  draw.text(
+    (text_x, text_y),
+    get_display(label),
+    font=font,
+    fill=legend_cfg.get("color", "#FFFDF5"),
+    stroke_width=int(legend_cfg.get("stroke_width", 2)),
+    stroke_fill=legend_cfg.get("stroke_color", "#1A0A00"),
+  )
+  return chip_w
+
+
+def _draw_strum_title_strip(
+  draw: ImageDraw.ImageDraw,
+  *,
+  canvas_w: int,
+  y: int,
+  strip_cfg: dict,
+) -> None:
+  height = int(strip_cfg.get("height", 12))
+  width_ratio = float(strip_cfg.get("width_ratio", 0.42))
+  strip_w = max(1, int(canvas_w * width_ratio))
+  x0 = (canvas_w - strip_w) // 2
+  x1 = x0 + strip_w
+  fill = strip_cfg.get("color", "#FFD54F")
+  shadow = strip_cfg.get("outline", "#1A0A00")
+  draw.rounded_rectangle((x0, y, x1, y + height), radius=height // 2, fill=fill, outline=shadow, width=2)
+
+
+def generate_strum_slide(
+  *,
+  pattern: list[str],
+  background: Path | None,
+  output: Path,
+  config: dict,
+  title: str | None = None,
+  subtitle: str | None = None,
+) -> Path:
+  tokens = parse_strum_pattern(pattern)
+  strum_cfg = config.get("strum", {})
+  canvas_w = config["canvas"]["width"]
+  canvas_h = config["canvas"]["height"]
+
+  bg_path = background or Path(config["background"])
+  if not bg_path.is_absolute():
+    bg_path = ROOT / bg_path if not bg_path.exists() else bg_path
+  if not bg_path.exists():
+    bg_path = ROOT / config["background"]
+  if not bg_path.exists():
+    raise FileNotFoundError(f"Background not found: {bg_path}")
+
+  canvas = cover_resize(Image.open(bg_path).convert("RGB"), canvas_w, canvas_h)
+  overlay_cfg = strum_cfg.get("overlay", config.get("intro", {}).get("overlay", {}))
+  canvas = apply_intro_overlay(canvas, overlay_cfg).convert("RGBA")
+
+  draw = ImageDraw.Draw(canvas)
+  title_text = (title or strum_cfg.get("default_title", "הפריטה")).strip()
+  title_style = strum_cfg.get("title", {})
+  title_font = load_font(config, int(title_style.get("font_size", 118)))
+  title_y = int(title_style.get("y", 280))
+  draw_text_centered(
+    draw,
+    title_text,
+    canvas_w // 2,
+    title_y,
+    title_font,
+    title_style.get("color", "#FFD54F"),
+    title_style.get("shadow_color", title_style.get("shadow", "#000000")),
+    int(title_style.get("shadow_offset", 4)),
+    title_style.get("stroke_color", "#1A0A00"),
+    int(title_style.get("stroke_width", 5)),
+  )
+  title_strip_cfg = strum_cfg.get("title_strip", {})
+  if title_strip_cfg.get("enabled", True):
+    strip_y = title_y + int(title_style.get("font_size", 118)) + int(title_strip_cfg.get("gap", 18))
+    _draw_strum_title_strip(draw, canvas_w=canvas_w, y=strip_y, strip_cfg=title_strip_cfg)
+
+  grid_cfg = strum_cfg.get("grid", {})
+  grid_base = int(grid_cfg.get("top_y", 650))
+  cells_offset_y = int(grid_cfg.get("cells_offset_y", 0))
+  grid_y0 = grid_base + cells_offset_y
+
+  if subtitle and subtitle.strip():
+    sub_style = strum_cfg.get("subtitle", {})
+    sub_font = load_font(config, int(sub_style.get("font_size", 64)))
+    sub_y = int(sub_style.get("y", 430))
+    draw_text_centered(
+      draw,
+      subtitle.strip(),
+      canvas_w // 2,
+      sub_y,
+      sub_font,
+      sub_style.get("color", "#FFFDF5"),
+      sub_style.get("shadow_color", sub_style.get("shadow", "#000000")),
+      int(sub_style.get("shadow_offset", 3)),
+      sub_style.get("stroke_color", "#1A0A00"),
+      int(sub_style.get("stroke_width", 4)),
+    )
+
+  token_cfg = strum_cfg.get("tokens", {})
+  number_cfg = strum_cfg.get("beat_numbers", {})
+  connector_cfg = strum_cfg.get("connector", {})
+  max_cols = int(grid_cfg.get("max_cols", 8))
+  gap_x = int(grid_cfg.get("gap_x", 16))
+  gap_y = int(grid_cfg.get("gap_y", 88))
+  panel_cfg = grid_cfg.get("panel", {})
+  cols, rows = _strum_layout_grid(len(tokens), max_cols)
+
+  cell_size = int(grid_cfg.get("cell_size", 132))
+  if cols >= 7:
+    cell_size = int(grid_cfg.get("cell_size_compact", 104))
+
+  grid_w = cols * cell_size + (cols - 1) * gap_x
+  grid_h = rows * cell_size + (rows - 1) * gap_y
+  if number_cfg.get("enabled", True):
+    grid_h += int(number_cfg.get("extra_row_height", 52))
+
+  grid_x0 = (canvas_w - grid_w) // 2
+  panel_rect = None
+
+  if panel_cfg.get("enabled", True):
+    pad_x = int(panel_cfg.get("padding_x", 52))
+    pad_y = int(panel_cfg.get("padding_y", 48))
+    panel_rect = (
+      grid_x0 - pad_x,
+      grid_y0 - pad_y,
+      grid_x0 + grid_w + pad_x,
+      grid_y0 + grid_h + pad_y,
+    )
+    panel_layer = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
+    panel_draw = ImageDraw.Draw(panel_layer)
+    rgb = _parse_hex_color(panel_cfg.get("color", "#0A0A0A"))
+    opacity = float(panel_cfg.get("opacity", 0.88))
+    radius = int(panel_cfg.get("radius", 44))
+    panel_draw.rounded_rectangle(
+      panel_rect,
+      radius=radius,
+      fill=(*rgb, int(255 * opacity)),
+      outline=panel_cfg.get("outline", "#FFD54F"),
+      width=int(panel_cfg.get("outline_width", 3)),
+    )
+    canvas.alpha_composite(panel_layer)
+    accent_h = int(panel_cfg.get("accent_height", 10))
+    accent_layer = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
+    accent_draw = ImageDraw.Draw(accent_layer)
+    accent_draw.rounded_rectangle(
+      (
+        panel_rect[0] + 24,
+        panel_rect[1] + 14,
+        panel_rect[2] - 24,
+        panel_rect[1] + 14 + accent_h,
+      ),
+      radius=accent_h // 2,
+      fill=panel_cfg.get("accent", "#FFD54F"),
+    )
+    canvas.alpha_composite(accent_layer)
+    draw = ImageDraw.Draw(canvas)
+
+  centers: list[tuple[int, int, str, int]] = []
+  for index, token in enumerate(tokens):
+    row = index // cols
+    col_in_row = index % cols
+    row_count = min(cols, len(tokens) - row * cols)
+    row_w = row_count * cell_size + (row_count - 1) * gap_x
+    row_x0 = grid_x0 + (grid_w - row_w) // 2
+    # Beat 1 on the left, then left → right.
+    col_pos = col_in_row
+    cx = row_x0 + col_pos * (cell_size + gap_x) + cell_size // 2
+    cy = grid_y0 + row * (cell_size + gap_y) + cell_size // 2
+    centers.append((cx, cy, token, index + 1))
+
+  if connector_cfg.get("enabled", True):
+    connector_draw = ImageDraw.Draw(canvas)
+    for i in range(len(centers) - 1):
+      cx0, cy0, _t0, b0 = centers[i]
+      cx1, cy1, _t1, b1 = centers[i + 1]
+      if b1 != b0 + 1:
+        continue
+      if cy0 != cy1:
+        continue
+      _draw_strum_connector(
+        connector_draw,
+        x0=cx0 + cell_size // 2 + 4,
+        y0=cy0,
+        x1=cx1 - cell_size // 2 - 4,
+        y1=cy1,
+        connector_cfg=connector_cfg,
+      )
+
+  for cx, cy, token, beat_number in centers:
+    _draw_strum_cell(
+      canvas,
+      center_x=cx,
+      center_y=cy,
+      size=cell_size,
+      token=token,
+      beat_number=beat_number,
+      token_cfg=token_cfg,
+      number_cfg=number_cfg,
+      config=config,
+    )
+
+  legend_cfg = strum_cfg.get("legend", {})
+  if legend_cfg.get("enabled", True):
+    legend_y = int(legend_cfg.get("y", 1520))
+    legend_gap = int(legend_cfg.get("gap", 22))
+    entries = [
+      ("D", legend_cfg.get("down_label", "↓ למטה")),
+      ("U", legend_cfg.get("up_label", "↑ למעלה")),
+      ("X", legend_cfg.get("mute_label", "× השתקה")),
+    ]
+    chip_widths = []
+    for token_key, label in entries:
+      style = token_cfg.get(token_key, {})
+      icon_size = int(legend_cfg.get("icon_size", 38))
+      pad_x = int(legend_cfg.get("chip_padding_x", 18))
+      gap = int(legend_cfg.get("chip_gap", 12))
+      font = load_font(config, int(legend_cfg.get("font_size", 40)))
+      probe = ImageDraw.Draw(Image.new("RGBA", (1, 1)))
+      bbox = probe.textbbox((0, 0), get_display(label), font=font)
+      chip_widths.append(pad_x * 2 + icon_size + gap + (bbox[2] - bbox[0]))
+    total_w = sum(chip_widths) + legend_gap * (len(entries) - 1)
+    x = (canvas_w - total_w) // 2
+    for (token_key, label), chip_w in zip(entries, chip_widths, strict=True):
+      _draw_strum_legend_chip(
+        canvas,
+        center_x=x + chip_w // 2,
+        center_y=legend_y,
+        token=token_key,
+        label=label,
+        token_cfg=token_cfg,
+        legend_cfg=legend_cfg,
+        config=config,
+      )
+      x += chip_w + legend_gap
+
+  output.parent.mkdir(parents=True, exist_ok=True)
+  canvas.convert("RGB").save(output, "PNG", optimize=True)
+  return output
+
+
 def collect_intro_lines(data: dict) -> list[str]:
   if "lines" in data:
     return [str(line) for line in data["lines"] if line]
@@ -803,6 +1545,7 @@ def generate_intro_slide(
   config: dict,
   slide_style: str = "intro",
   difficulty: str | None = None,
+  accent_strip_without_badge: bool = False,
 ) -> Path:
   canvas_w = config["canvas"]["width"]
   canvas_h = config["canvas"]["height"]
@@ -825,8 +1568,15 @@ def generate_intro_slide(
   canvas = apply_intro_overlay(canvas, slide_cfg.get("overlay", {}))
 
   theme = get_difficulty_theme(config, difficulty) if slide_style == "intro" else None
+  accent_strip_theme = None
+  if (
+    slide_style == "intro"
+    and not theme
+    and accent_strip_without_badge
+  ):
+    accent_strip_theme = get_thumbnail_default_strip_theme(config)
   layout_cfg = slide_cfg.get("layout", {})
-  use_centered = slide_style == "intro" and layout_cfg.get("centered", False)
+  use_centered = slide_style in ("intro", "outro") and layout_cfg.get("centered", False)
 
   if use_centered:
     block = build_centered_intro_layout(
@@ -837,6 +1587,7 @@ def generate_intro_slide(
       theme=theme,
       config=config,
       slide_cfg=slide_cfg,
+      accent_strip_theme=accent_strip_theme,
     )
     canvas = apply_intro_content_panel(
       canvas,
@@ -858,6 +1609,14 @@ def generate_intro_slide(
         canvas_w=canvas_w,
         top_y=block["strip_top"],
         theme=theme,
+        strip_cfg=block["strip_cfg"],
+      )
+    elif block.get("accent_strip_theme") and block.get("strip_top") is not None:
+      draw_difficulty_color_strip(
+        draw,
+        canvas_w=canvas_w,
+        top_y=block["strip_top"],
+        theme=block["accent_strip_theme"],
         strip_cfg=block["strip_cfg"],
       )
     for entry in block["lines"]:

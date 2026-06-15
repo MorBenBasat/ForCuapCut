@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ForCuapCut</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header class="header">
+    <h1>ForCuapCut</h1>
+    <p class="subtitle">יצירת סליידים וסרטונים לטיקטוק</p>
+  </header>
+
+  <nav class="tabs" role="tablist">
+    <button type="button" class="tab active" data-tab="song">שיר</button>
+    <button type="button" class="tab" data-tab="video">סרטון</button>
+    <button type="button" class="tab" data-tab="strum">פריטה</button>
+    <button type="button" class="tab" data-tab="thumbnail">Thumbnail</button>
+    <button type="button" class="tab" data-tab="intro">פתיחה</button>
+    <button type="button" class="tab" data-tab="outro">סיום</button>
+    <button type="button" class="tab" data-tab="artists">זמרים</button>
+  </nav>
+
+  <main class="container">
+    <!-- שיר -->
+    <section id="panel-song" class="panel active">
+      <h2>סלייד שיר</h2>
+      <p class="note">בלי תמונת רקע — רקע גיטרה (ברירת מחדל).</p>
+      <form id="form-song" class="form">
+        <label>זמר
+          <select name="artist" id="song-artist" required></select>
+        </label>
+        <label>שם השיר
+          <input type="text" name="song" id="song-title" required placeholder="בעירי">
+        </label>
+        <label>רמת קושי
+          <select name="difficulty" id="song-difficulty">
+            <option value="קל">קל</option>
+            <option value="בינוני">בינוני</option>
+            <option value="קשה">קשה</option>
+          </select>
+        </label>
+        <fieldset class="chords-fieldset">
+          <legend>אקורדים <span class="hint">(4–8)</span></legend>
+          <label>כמה אקורדים?
+            <select id="chord-count">
+              <option value="4">4</option>
+              <option value="5">5</option>
+              <option value="6" selected>6</option>
+              <option value="7">7</option>
+              <option value="8">8</option>
+            </select>
+          </label>
+          <div id="chord-inputs" class="chord-grid"></div>
+        </fieldset>
+        <label>רקע <span class="hint">(ריק = גיטרה)</span>
+          <input type="file" name="background" id="song-background" accept="image/*">
+        </label>
+        <div id="song-upload-hint" class="hint thumb-upload-hint hidden"></div>
+        <button type="submit" class="btn primary">צור תמונה</button>
+      </form>
+      <div id="result-song" class="result hidden"></div>
+    </section>
+
+    <!-- סרטון -->
+    <section id="panel-video" class="panel">
+      <h2>סרטון עם הדגשת אקורדים</h2>
+      <p class="note">האקורדים ממוספרים לפי הסדר. האקורד הראשון תמיד מתחיל ב-0.</p>
+      <form id="form-video" class="form">
+        <label class="checkbox-row">
+          <input type="checkbox" id="video-use-song" checked>
+          השתמש בנתונים מהשיר שיצרת
+        </label>
+        <div id="video-meta-fields">
+          <label>זמר
+            <select name="artist" id="video-artist" required></select>
+          </label>
+          <label>שם השיר
+            <input type="text" name="song" id="video-title" required>
+          </label>
+          <label>רמת קושי
+            <select name="difficulty" id="video-difficulty">
+              <option value="קל">קל</option>
+              <option value="בינוני">בינוני</option>
+              <option value="קשה">קשה</option>
+            </select>
+          </label>
+        </div>
+        <fieldset class="chords-fieldset">
+          <legend>אקורדים + זמנים</legend>
+          <label>כמה אקורדים?
+            <select id="video-chord-count">
+              <option value="4">4</option>
+              <option value="5">5</option>
+              <option value="6" selected>6</option>
+              <option value="7">7</option>
+              <option value="8">8</option>
+            </select>
+          </label>
+          <div id="video-chord-rows" class="timing-grid"></div>
+        </fieldset>
+        <label>אורך סרטון (שניות) <span class="hint">ריק = עד סוף השיר</span>
+          <input type="number" name="end" id="video-end" min="1" step="0.5" placeholder="30">
+        </label>
+        <label>קובץ שיר (MP3)
+          <input type="file" name="audio" accept="audio/*,.mp3" required>
+        </label>
+        <button type="submit" class="btn primary">צור סרטון</button>
+        <p class="hint loading-note">יצירת סרטון לוקחת כדקה–שתיים…</p>
+      </form>
+      <div id="result-video" class="result hidden"></div>
+    </section>
+
+    <!-- פריטה -->
+    <section id="panel-strum" class="panel">
+      <h2>סלייד פריטה</h2>
+      <p class="note">בחר לכל פעימה: ↓ למטה · ↑ למעלה · × השתקה. רקע ריק = גיטרה.</p>
+      <form id="form-strum" class="form">
+        <label>שם השיר <span class="hint">(לשם הקובץ)</span>
+          <input type="text" name="song" id="strum-song" placeholder="כפיות">
+        </label>
+        <label>כותרת
+          <input type="text" name="title" id="strum-title" value="הפריטה" placeholder="הפריטה">
+        </label>
+        <label>תת-כותרת <span class="hint">(אופציונלי)</span>
+          <input type="text" name="subtitle" id="strum-subtitle" placeholder="כפיות — עדן חסון">
+        </label>
+        <fieldset class="chords-fieldset">
+          <legend>פעימות</legend>
+          <div class="strum-toolbar">
+            <button type="button" class="btn" id="strum-add-beat">+ הוסף פעימה</button>
+            <button type="button" class="btn" id="strum-remove-beat">− הסר פעימה</button>
+            <span class="hint" id="strum-beat-count-label">8 פעימות</span>
+          </div>
+          <div id="strum-beats" class="strum-beats"></div>
+        </fieldset>
+        <label>רקע <span class="hint">(ריק = גיטרה)</span>
+          <input type="file" name="background" id="strum-background" accept="image/*">
+        </label>
+        <div id="strum-upload-hint" class="hint thumb-upload-hint hidden"></div>
+        <div class="strum-live-preview" id="strum-live-preview" aria-hidden="true"></div>
+        <div class="thumb-actions">
+          <button type="button" class="btn" id="strum-preview-btn">עדכן תצוגה מקדימה</button>
+          <button type="submit" class="btn primary">צור תמונה סופית</button>
+        </div>
+      </form>
+      <div id="strum-preview-wrap" class="thumb-preview-wrap hidden">
+        <h3 class="thumb-preview-title">תצוגה מקדימה</h3>
+        <p id="strum-preview-note" class="hint"></p>
+        <img id="strum-preview-img" alt="תצוגה מקדימה" class="thumb-preview-img">
+      </div>
+      <div id="result-strum" class="result hidden"></div>
+    </section>
+
+    <!-- Thumbnail — סלייד ראשון לקרוסלה -->
+    <section id="panel-thumbnail" class="panel">
+      <h2>Thumbnail — סלייד ראשון</h2>
+      <p class="note">רקע מותאם לשיר ספציפי. בלי תמונה — רקע גיטרה (כמו פתיחה רגילה).</p>
+      <form id="form-thumbnail" class="form">
+        <label>שם השיר <span class="hint">(לשם הקובץ)</span>
+          <input type="text" name="song" id="thumb-song" placeholder="כפיות">
+        </label>
+        <label>שורה 1
+          <input type="text" name="line1" id="thumb-line1" required placeholder="איך לנגן">
+        </label>
+        <label>שורה 2
+          <input type="text" name="line2" id="thumb-line2" required placeholder="&quot;כפיות&quot;">
+        </label>
+        <label>שורה 3
+          <input type="text" name="line3" id="thumb-line3" required placeholder="של עדן חסון">
+        </label>
+        <label>שורה 4 <span class="hint">(אופציונלי)</span>
+          <input type="text" name="line4" id="thumb-line4" placeholder="">
+        </label>
+        <label>רמת קושי <span class="hint">(אופציונלי — ללא = פס צהוב בלבד)</span>
+          <select name="difficulty" id="thumb-difficulty">
+            <option value="">ללא רמה</option>
+            <option value="קל">קל</option>
+            <option value="בינוני">בינוני</option>
+            <option value="קשה">קשה</option>
+          </select>
+        </label>
+        <label>THUMBNAIL <span class="hint">(רקע — ריק = גיטרה)</span>
+          <input type="file" name="thumbnail" id="thumb-image" accept="image/*">
+        </label>
+        <div id="thumb-upload-hint" class="hint thumb-upload-hint hidden"></div>
+        <div class="thumb-actions">
+          <button type="button" class="btn" id="thumb-preview-btn">עדכן תצוגה מקדימה</button>
+          <button type="submit" class="btn primary">צור תמונה סופית</button>
+        </div>
+      </form>
+      <div id="thumb-preview-wrap" class="thumb-preview-wrap hidden">
+        <h3 class="thumb-preview-title">תצוגה מקדימה</h3>
+        <p id="thumb-preview-note" class="hint"></p>
+        <img id="thumb-preview-img" alt="תצוגה מקדימה" class="thumb-preview-img">
+      </div>
+      <div id="result-thumbnail" class="result hidden"></div>
+    </section>
+
+    <!-- פתיחה -->
+    <section id="panel-intro" class="panel">
+      <h2>סלייד פתיחה</h2>
+      <form id="form-intro" class="form">
+        <label>שורה 1
+          <input type="text" name="line1" required placeholder="3 שירים מוכרים">
+        </label>
+        <label>שורה 2
+          <input type="text" name="line2" required placeholder="של 4 אקורדים">
+        </label>
+        <label>שורה 3
+          <input type="text" name="line3" required placeholder="5 דקות ללמוד">
+        </label>
+        <label>שורה 4 <span class="hint">(אופציונלי)</span>
+          <input type="text" name="line4" placeholder="אקורדים בסיסיים בלבד">
+        </label>
+        <label>רמת קושי <span class="hint">(חובה)</span>
+          <select name="difficulty" required>
+            <option value="קל">קל</option>
+            <option value="בינוני">בינוני</option>
+            <option value="קשה">קשה</option>
+          </select>
+        </label>
+        <button type="submit" class="btn primary">צור פתיחה</button>
+      </form>
+      <div id="result-intro" class="result hidden"></div>
+    </section>
+
+    <!-- סיום -->
+    <section id="panel-outro" class="panel">
+      <h2>סלייד סיום</h2>
+      <p class="note">בלי תמונת רקע — רקע גיטרה (ברירת מחדל).</p>
+      <form id="form-outro" class="form">
+        <label>שורה 1
+          <input type="text" name="line1" required>
+        </label>
+        <label>שורה 2
+          <input type="text" name="line2" required>
+        </label>
+        <label>שורה 3
+          <input type="text" name="line3" required>
+        </label>
+        <label>שורה 4 <span class="hint">(אופציונלי)</span>
+          <input type="text" name="line4">
+        </label>
+        <label>רקע <span class="hint">(ריק = גיטרה)</span>
+          <input type="file" name="background" id="outro-background" accept="image/*">
+        </label>
+        <div id="outro-upload-hint" class="hint thumb-upload-hint hidden"></div>
+        <button type="submit" class="btn primary">צור סיום</button>
+      </form>
+      <div id="result-outro" class="result hidden"></div>
+    </section>
+
+    <!-- זמרים -->
+    <section id="panel-artists" class="panel">
+      <h2>ניהול זמרים</h2>
+      <ul id="artists-list" class="artists-list"></ul>
+      <form id="form-artist" class="form">
+        <h3>הוסף זמר</h3>
+        <label>שם
+          <input type="text" name="name" required placeholder="עדן בן זקן">
+        </label>
+        <label>תמונה
+          <input type="file" name="photo" accept="image/*" required>
+        </label>
+        <button type="submit" class="btn primary">שמור זמר</button>
+      </form>
+      <div id="result-artists" class="result hidden"></div>
+    </section>
+  </main>
+
+  <div id="toast" class="toast hidden" role="status"></div>
+  <script src="/static/app.js"></script>
+</body>
+</html>

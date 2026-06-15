@@ -1,0 +1,21 @@
+# דוגמה מלאה — "בעירי" אייל גולן
+# ערוך את הזמנים לפי השיר האמיתי, שים MP3 ב-input/be_iri.mp3
+artist: "אייל גולן"
+song: "בעירי"
+difficulty: קל
+chords:
+  - AM
+  - DM
+  - F
+  - E
+  - G
+  - C
+audio: "input/be_iri.mp3"
+output: "output/בעירי.mp4"
+timeline:
+  - { chord: 1, at: 0 }    # AM
+  - { chord: 2, at: 5 }    # DM
+  - { chord: 3, at: 10 }   # F
+  - { chord: 4, at: 15 }   # E
+  - { chord: 5, at: 20 }   # G
+  - { chord: 6, at: 25 }   # C

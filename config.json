@@ -20,15 +20,19 @@
   },
   "singer": {
     "scale": 24,
+    "scale_compact": 20,
     "anchor": "top_center",
-    "y": 0
+    "y": 0,
+    "circular": true,
+    "border_width": 5,
+    "border_color": "#FFF8DC"
   },
   "text": {
     "anchor": "top_center",
     "artist": {
       "capcut_x": 0,
-      "capcut_y": 1540,
-      "font_size": 96,
+      "capcut_y": 1580,
+      "font_size": 78,
       "color": "#FFF8DC",
       "stroke_color": "#000000",
       "stroke_width": 3,
@@ -37,7 +41,7 @@
     },
     "song": {
       "capcut_x": 0,
-      "capcut_y": 1680,
+      "capcut_y": 1450,
       "font_size": 112,
       "color": "#FFEB3B",
       "stroke_color": "#000000",
@@ -48,6 +52,7 @@
   },
   "chord_grid": {
     "scale": 19.5,
+    "scale_compact": 16,
     "horizontal_gap": 28,
     "labels": {
       "enabled": true,
@@ -91,6 +96,26 @@
         ],
         "top_y": 215,
         "bottom_y": -250
+      },
+      "7": {
+        "pattern": [
+          3,
+          3,
+          1
+        ],
+        "first_row_y": 280,
+        "vertical_gap": 28,
+        "last_row_extra_gap": 24
+      },
+      "8": {
+        "pattern": [
+          3,
+          3,
+          2
+        ],
+        "first_row_y": 280,
+        "vertical_gap": 28,
+        "last_row_extra_gap": 24
       }
     }
   },
@@ -131,6 +156,176 @@
       }
     },
     "chord_tint_enabled": false
+  },
+  "thumbnail": {
+    "default_strip": {
+      "accent": "#FFD54F",
+      "badge_bg": "#FFD54F",
+      "shadow": "#1A0A00"
+    }
+  },
+  "strum": {
+    "default_title": "הפריטה",
+    "overlay": {
+      "enabled": true,
+      "top_opacity": 0.52,
+      "bottom_opacity": 0.62,
+      "fade_ratio": 0.36,
+      "edge_color": "#0A0A0A"
+    },
+    "title_strip": {
+      "enabled": true,
+      "height": 12,
+      "width_ratio": 0.38,
+      "color": "#FFD54F",
+      "outline": "#1A0A00",
+      "gap": 18
+    },
+    "title": {
+      "font_size": 122,
+      "y": 270,
+      "color": "#FFD54F",
+      "stroke_color": "#1A0A00",
+      "stroke_width": 6,
+      "shadow_color": "#000000",
+      "shadow_offset": 5
+    },
+    "subtitle": {
+      "font_size": 64,
+      "y": 430,
+      "color": "#FFFDF5",
+      "stroke_color": "#1A0A00",
+      "stroke_width": 4,
+      "shadow_color": "#000000",
+      "shadow_offset": 3
+    },
+    "grid": {
+      "top_y": 650,
+      "cells_offset_y": 300,
+      "max_cols": 8,
+      "cell_size": 132,
+      "cell_size_compact": 104,
+      "gap_x": 16,
+      "gap_y": 88,
+      "panel": {
+        "enabled": true,
+        "padding_x": 52,
+        "padding_y": 48,
+        "opacity": 0.88,
+        "radius": 44,
+        "color": "#101010",
+        "outline": "#FFD54F",
+        "outline_width": 3,
+        "accent": "#FFD54F",
+        "accent_height": 10
+      }
+    },
+    "connector": {
+      "enabled": true,
+      "color": "#FFD54F",
+      "width": 3,
+      "dot_radius": 5,
+      "outline": "#1A0A00"
+    },
+    "tokens": {
+      "D": {
+        "symbol": "↓",
+        "bg_top": "#4ADE80",
+        "bg_bottom": "#15803D",
+        "color": "#FFFFFF",
+        "outline": "#14532D",
+        "glow": "#86EFAC",
+        "glow_width": 4,
+        "outline_width": 3,
+        "stroke_color": "#052E16",
+        "stroke_width": 3,
+        "shadow_color": "#000000",
+        "shadow_alpha": 120,
+        "shadow_blur": 8,
+        "shine_opacity": 58,
+        "radius": 28,
+        "symbol_scale": 0.52,
+        "symbol_shadow_offset": 3
+      },
+      "U": {
+        "symbol": "↑",
+        "bg_top": "#FDE047",
+        "bg_bottom": "#CA8A04",
+        "color": "#1A0A00",
+        "outline": "#854D0E",
+        "glow": "#FEF08A",
+        "glow_width": 4,
+        "outline_width": 3,
+        "stroke_color": "#422006",
+        "stroke_width": 3,
+        "shadow_color": "#000000",
+        "shadow_alpha": 120,
+        "shadow_blur": 8,
+        "shine_opacity": 64,
+        "radius": 28,
+        "symbol_scale": 0.52,
+        "symbol_shadow_offset": 3
+      },
+      "X": {
+        "symbol": "×",
+        "bg_top": "#9CA3AF",
+        "bg_bottom": "#374151",
+        "color": "#FCA5A5",
+        "outline": "#1F2937",
+        "glow": "#F87171",
+        "glow_width": 4,
+        "outline_width": 3,
+        "stroke_color": "#111827",
+        "stroke_width": 3,
+        "shadow_color": "#000000",
+        "shadow_alpha": 120,
+        "shadow_blur": 8,
+        "shine_opacity": 42,
+        "radius": 28,
+        "symbol_scale": 0.48,
+        "symbol_shadow_offset": 3
+      }
+    },
+    "beat_numbers": {
+      "enabled": true,
+      "font_size": 30,
+      "gap_below": 16,
+      "extra_row_height": 52,
+      "lift": 10,
+      "color": "#FFF8DC",
+      "stroke_color": "#000000",
+      "stroke_width": 2,
+      "shadow_color": "#000000",
+      "shadow_offset": 1,
+      "pill_bg": "#121212",
+      "pill_outline": "#FFD54F",
+      "pill_outline_width": 2,
+      "pill_radius": 16,
+      "pill_padding_x": 14,
+      "pill_padding_y": 4
+    },
+    "legend": {
+      "enabled": true,
+      "y": 1520,
+      "font_size": 40,
+      "gap": 22,
+      "icon_size": 38,
+      "chip_height": 58,
+      "chip_gap": 12,
+      "chip_padding_x": 18,
+      "chip_radius": 28,
+      "chip_bg": "#121212",
+      "chip_outline": "#FFD54F",
+      "chip_outline_width": 2,
+      "down_label": "↓ למטה",
+      "up_label": "↑ למעלה",
+      "mute_label": "× השתקה",
+      "color": "#FFFDF5",
+      "stroke_color": "#1A0A00",
+      "stroke_width": 2,
+      "shadow": "#000000",
+      "shadow_offset": 2
+    }
   },
   "song": {
     "grayscale_background": true
@@ -211,10 +406,23 @@
     },
     "overlay": {
       "enabled": true,
-      "top_opacity": 0.38,
-      "bottom_opacity": 0.48,
-      "fade_ratio": 0.30,
-      "edge_color": "#000000"
+      "top_opacity": 0.46,
+      "bottom_opacity": 0.54,
+      "fade_ratio": 0.32,
+      "edge_color": "#1A0800"
+    },
+    "layout": {
+      "centered": true,
+      "line_font_sizes": [135, 98, 88, 88],
+      "line_gap": 28,
+      "panel": {
+        "enabled": true,
+        "padding_x": 44,
+        "padding_y": 36,
+        "opacity": 0.78,
+        "radius": 36,
+        "color": "#0A0A0A"
+      }
     },
     "line_styles": [
       {
